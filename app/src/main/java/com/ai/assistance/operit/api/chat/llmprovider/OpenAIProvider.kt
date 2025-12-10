@@ -135,6 +135,43 @@ open class OpenAIProvider(
         }
     }
 
+    protected fun sanitizeImageDataForLogging(json: JSONObject): JSONObject {
+        fun sanitizeObject(obj: JSONObject) {
+            fun sanitizeArray(arr: JSONArray) {
+                for (i in 0 until arr.length()) {
+                    val value = arr.get(i)
+                    when (value) {
+                        is JSONObject -> sanitizeObject(value)
+                        is JSONArray -> sanitizeArray(value)
+                        is String -> {
+                            if (value.startsWith("data:") && value.contains(";base64,")) {
+                                arr.put(i, "[image base64 omitted, length=${value.length}]")
+                            }
+                        }
+                    }
+                }
+            }
+
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val value = obj.get(key)
+                when (value) {
+                    is JSONObject -> sanitizeObject(value)
+                    is JSONArray -> sanitizeArray(value)
+                    is String -> {
+                        if (value.startsWith("data:") && value.contains(";base64,")) {
+                            obj.put(key, "[image base64 omitted, length=${value.length}]")
+                        }
+                    }
+                }
+            }
+        }
+
+        sanitizeObject(json)
+        return json
+    }
+
     // 取消当前流式传输
     override fun cancelStreaming() {
         isManuallyCancelled = true
@@ -304,7 +341,8 @@ open class OpenAIProvider(
             val toolsArray = logJson.getJSONArray("tools")
             logJson.put("tools", "[${toolsArray.length()} tools omitted for brevity]")
         }
-        logLargeString("AIService", logJson.toString(4), "请求体: ")
+        val sanitizedLogJson = sanitizeImageDataForLogging(logJson)
+        logLargeString("AIService", sanitizedLogJson.toString(4), "请求体: ")
         return jsonObject.toString()
     }
 
@@ -1206,7 +1244,10 @@ open class OpenAIProvider(
             while (true) {
                 val line = reader.readLine() ?: break
 
-                if (!line.startsWith("data:")) continue
+                if (!line.startsWith("data:")) {
+                    logLargeString("AIService", line, "【发送消息】收到非data行: ")
+                    continue
+                }
                 
                 val data = line.substring(5).trim()
                 if (data == "[DONE]") {
@@ -1231,6 +1272,7 @@ open class OpenAIProvider(
                     processResponseChunk(jsonResponse, state, emitter, onTokensUpdated)
                 } catch (e: Exception) {
                     AppLogger.w("AIService", "【发送消息】JSON解析错误: ${e.message}")
+                    logLargeString("AIService", data, "【发送消息】JSON解析失败时的原始data: ")
                 }
             }
             

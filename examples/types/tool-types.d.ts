@@ -10,7 +10,7 @@ import {
     HttpResponseData, VisitWebResultData,
     SleepResultData, SystemSettingData, AppOperationData, AppListData,
     DeviceInfoResultData, NotificationData, LocationData,
-    UIPageResultData, UIActionResultData, CombinedOperationResultData,
+    UIPageResultData, UIActionResultData, CombinedOperationResultData, AutomationExecutionResultData,
     CalculationResultData, FFmpegResultData, ADBResultData, IntentResultData, TerminalCommandResultData,
     FilePartContentData, FileApplyResultData, WorkflowListResultData, WorkflowResultData, WorkflowDetailResultData,
     StringResultData, ChatServiceStartResultData, ChatCreationResultData, ChatListResultData,
@@ -71,6 +71,7 @@ export interface ToolResultMap {
     'press_key': UIActionResultData;
     'swipe': UIActionResultData;
     'combined_operation': CombinedOperationResultData;
+    'run_ui_subagent': AutomationExecutionResultData;
 
     // Calculator operations
     'calculate': CalculationResultData;

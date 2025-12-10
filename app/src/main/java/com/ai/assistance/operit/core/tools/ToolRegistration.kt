@@ -1062,6 +1062,17 @@ fun registerAllTools(handler: AIToolHandler, context: Context) {
             executor = { tool -> kotlinx.coroutines.runBlocking { uiTools.getPageInfo(tool) } }
     )
 
+    // 运行UI子代理（多步自动化决策，仅记录动作日志）
+    handler.registerTool(
+            name = "run_ui_subagent",
+            descriptionGenerator = { tool ->
+                val intent = tool.parameters.find { it.name == "intent" }?.value ?: ""
+                val maxSteps = tool.parameters.find { it.name == "max_steps" }?.value ?: "20"
+                "运行UI子代理以完成任务: $intent (最多执行 $maxSteps 步)"
+            },
+            executor = { tool -> kotlinx.coroutines.runBlocking { uiTools.runUiSubAgent(tool) } }
+    )
+
     // 在输入框中设置文本
     handler.registerTool(
             name = "set_input_text",

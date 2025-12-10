@@ -389,6 +389,30 @@ export interface CombinedOperationResultData {
 }
 
 
+/**
+ * Automation execution result data (for UI subagent runs)
+ */
+export interface AutomationExecutionResultData {
+    /** Function name of the automation or subagent */
+    functionName: string;
+    /** Parameters provided to the automation */
+    providedParameters: Record<string, string>;
+    /** Whether the execution succeeded */
+    executionSuccess: boolean;
+    /** Detailed execution message and action logs */
+    executionMessage: string;
+    /** Optional error message when execution fails */
+    executionError?: string | null;
+    /** Final UI state information, if available */
+    finalState?: {
+        nodeId: string;
+        packageName: string;
+        activityName: string;
+    } | null;
+    /** Number of steps executed */
+    executionSteps: number;
+    toString(): string;
+}
 
 /**
  * ADB command execution result data
@@ -590,8 +614,9 @@ export interface UIActionResult extends BaseResult {
     data: UIActionResultData;
 }
 
-
-
+export interface AutomationExecutionResult extends BaseResult {
+    data: AutomationExecutionResultData;
+}
 
 export interface ADBResult extends BaseResult {
     data: ADBResultData;

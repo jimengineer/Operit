@@ -2034,7 +2034,7 @@
     <string name="function_desc_summary">生成对话总结，方便追踪重要信息</string>
     <string name="function_desc_problem_library">用于问题库的分析和管理</string>
     <string name="function_desc_file_binding">处理文件内容的智能绑定与混合，提供更精确的代码处理能力。建议使用快速的廉价模型如Gemini Flash，不建议使用DeepSeek R1</string>
-    <string name="function_desc_ui_controller">用于UI界面的自动遍历与操作，会被主模型调用。建议使用廉价快速模型。</string>
+    <string name="function_desc_ui_controller">用于UI界面的自动遍历与操作，对应的 UI 控制器模型仅在用户明确要求使用“智能体”控制时才会启用，例如可选择 autoglm 等专用模型。</string>
     <string name="function_desc_translation">提供多语言翻译功能，支持文本内容的语言转换。建议使用支持多语言的模型。</string>
     <string name="function_desc_image_recognition">用于图像内容识别和分析，调用read_file工具读取图片时支持intent参数进行深度理解。建议使用支持视觉的多模态模型。</string>
     

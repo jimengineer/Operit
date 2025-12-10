@@ -1,7 +1,7 @@
 /* METADATA
 {
     "name": "Automatic_ui_base",
-    "description": "提供基本的UI自动化工具，用于模拟用户在设备屏幕上的交互。",
+    "description": "提供基本的UI自动化工具，能够按照用户的要求帮助操作设备屏幕（如点击、滑动、输入等）。",
     "tools": [
         {
             "name": "usage_advice",
@@ -29,6 +29,14 @@
         {
             "name": "tap",
             "description": "在特定坐标模拟点击。",
+            "parameters": [
+                { "name": "x", "description": "X坐标", "type": "number", "required": true },
+                { "name": "y", "description": "Y坐标", "type": "number", "required": true }
+            ]
+        },
+        {
+            "name": "double_tap",
+            "description": "在特定坐标模拟双击（快速连续点击两次）。",
             "parameters": [
                 { "name": "x", "description": "X坐标", "type": "number", "required": true },
                 { "name": "y", "description": "Y坐标", "type": "number", "required": true }
@@ -124,6 +132,17 @@ const UIAutomationTools = (function () {
     async function tap(params: { x: number, y: number }): Promise<ToolResponse> {
         const result = await Tools.UI.tap(params.x, params.y);
         return { success: true, message: '点击操作成功', data: result };
+    }
+
+    async function double_tap(params: { x: number, y: number }): Promise<ToolResponse> {
+        const first = await Tools.UI.tap(params.x, params.y);
+        await Tools.System.sleep(120);
+        const second = await Tools.UI.tap(params.x, params.y);
+        return {
+            success: true,
+            message: '双击操作成功',
+            data: { first, second },
+        };
     }
 
     async function click_element(params: { resourceId?: string, className?: string, index?: number, partialMatch?: boolean, bounds?: string }): Promise<ToolResponse> {
@@ -244,10 +263,12 @@ const UIAutomationTools = (function () {
         get_page_info: (params: { format?: 'xml' | 'json', detail?: 'minimal' | 'summary' | 'full' }) => wrapToolExecution(get_page_info, params),
         get_page_screenshot_image: () => wrapToolExecution(get_page_screenshot_image, {}),
         tap: (params: { x: number, y: number }) => wrapToolExecution(tap, params),
+        double_tap: (params: { x: number, y: number }) => wrapToolExecution(double_tap, params),
         click_element: (params: { resourceId?: string, className?: string, index?: number, partialMatch?: boolean, bounds?: string }) => wrapToolExecution(click_element, params),
         set_input_text: (params: { text: string }) => wrapToolExecution(set_input_text, params),
         press_key: (params: { key_code: string }) => wrapToolExecution(press_key, params),
         swipe: (params: { start_x: number, start_y: number, end_x: number, end_y: number, duration?: number }) => wrapToolExecution(swipe, params),
+
         main,
     };
 })();
@@ -255,6 +276,7 @@ const UIAutomationTools = (function () {
 exports.get_page_info = UIAutomationTools.get_page_info;
 exports.get_page_screenshot_image = UIAutomationTools.get_page_screenshot_image;
 exports.tap = UIAutomationTools.tap;
+exports.double_tap = UIAutomationTools.double_tap;
 exports.click_element = UIAutomationTools.click_element;
 exports.set_input_text = UIAutomationTools.set_input_text;
 exports.press_key = UIAutomationTools.press_key;

@@ -51,7 +51,7 @@ class QwenAIProvider(
             val toolsArray = logJson.getJSONArray("tools")
             logJson.put("tools", "[${toolsArray.length()} tools omitted for brevity]")
         }
-        logLargeString("QwenAIProvider", logJson.toString(4), "最终Qwen请求体: ")
+        val sanitizedLogJson = sanitizeImageDataForLogging(logJson)
 
         // 使用更新后的JSONObject创建新的RequestBody
         return jsonObject.toString().toRequestBody(JSON)

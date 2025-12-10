@@ -27,6 +27,7 @@ import {
     HttpResponseData as _HttpResponseData,
     VisitWebResultData as _VisitWebResultData,
     CombinedOperationResultData as _CombinedOperationResultData,
+    AutomationExecutionResultData as _AutomationExecutionResultData,
     FilePartContentData as _FilePartContentData,
     FileApplyResultData as _FileApplyResultData,
     GrepResultData as _GrepResultData,
@@ -115,6 +116,7 @@ declare global {
     type HttpResponseData = _HttpResponseData;
     type VisitWebResultData = _VisitWebResultData;
     type CombinedOperationResultData = _CombinedOperationResultData;
+    type AutomationExecutionResultData = _AutomationExecutionResultData;
     type FilePartContentData = _FilePartContentData;
     type FileApplyResultData = _FileApplyResultData;
     type GrepResultData = _GrepResultData;

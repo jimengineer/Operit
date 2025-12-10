@@ -109,6 +109,13 @@ export namespace UI {
      * @param endY - End Y coordinate
      */
     function swipe(startX: number, startY: number, endX: number, endY: number, duration?: number): Promise<UIActionResultData>;
+
+    /**
+     * Run the built-in UI automation subagent.
+     * @param intent - High-level task description for the subagent (e.g. "打开微信并发送一条消息").
+     * @param maxSteps - Optional maximum number of steps (default 20).
+     */
+    function runSubAgent(intent: string, maxSteps?: number): Promise<AutomationExecutionResultData>;
 }
 
 /**

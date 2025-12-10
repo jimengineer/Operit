@@ -929,7 +929,7 @@
     <string name="function_desc_summary">Generar resúmenes de conversación para rastrear información importante</string>
     <string name="function_desc_problem_library">Utilizado para análisis y gestión de biblioteca de problemas</string>
     <string name="function_desc_file_binding">Procesa la vinculación inteligente y mezcla de contenido de archivos, proporcionando capacidades de procesamiento de código más precisas. Se recomienda usar modelos rápidos y económicos como Gemini Flash, no se recomienda usar DeepSeek R1</string>
-    <string name="function_desc_ui_controller">Utilizado para traversal automático y operación de interfaces de UI, será llamado por el modelo principal. Se recomienda usar modelos rápidos económicos.</string>
+    <string name="function_desc_ui_controller">Utilizado para la exploración y operación automáticas de interfaces de UI. El modelo de controlador de UI correspondiente solo se activará cuando el usuario solicite explícitamente usar un «agente» para el control, por ejemplo eligiendo modelos dedicados como autoglm-phone-9b.</string>
     
     <!-- Functional Prompt Config Screen -->
     <string name="advanced_config_notice">Para configuraciones avanzadas como modificar plantillas de prompt del sistema, vaya a la página \"Gestionar Todos los Prompts\".</string>

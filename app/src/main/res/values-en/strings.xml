@@ -2021,7 +2021,7 @@
     <string name="function_desc_summary">Generate conversation summaries for tracking important information</string>
     <string name="function_desc_problem_library">Used for problem library analysis and management</string>
     <string name="function_desc_file_binding">Process intelligent binding and mixing of file content, providing more precise code processing capabilities. Recommend using fast, inexpensive models like Gemini Flash, not recommended to use DeepSeek R1</string>
-    <string name="function_desc_ui_controller">Used for automatic traversal and operation of UI interfaces, will be called by the main model. Recommend using inexpensive fast models.</string>
+    <string name="function_desc_ui_controller">Used for automatic traversal and operation of UI interfaces. The corresponding UI controller model is only activated when the user explicitly requests to use an "agent" for control, for example by choosing dedicated models such as autoglm-phone-9b.</string>
     
     <!-- Functional Prompt Config Screen -->
     <string name="advanced_config_notice">For advanced configurations like modifying system prompt templates, please go to the \"Manage All Prompts\" page.</string>

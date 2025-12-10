@@ -114,7 +114,8 @@ class DeepseekProvider(
             val toolsArray = logJson.getJSONArray("tools")
             logJson.put("tools", "[${toolsArray.length()} tools omitted for brevity]")
         }
-        logLargeString("DeepseekProvider", logJson.toString(4), "最终DeepSeek推理模式请求体: ")
+        val sanitizedLogJson = sanitizeImageDataForLogging(logJson)
+        logLargeString("DeepseekProvider", sanitizedLogJson.toString(4), "最终DeepSeek推理模式请求体: ")
 
         return jsonObject.toString().toRequestBody(JSON)
     }

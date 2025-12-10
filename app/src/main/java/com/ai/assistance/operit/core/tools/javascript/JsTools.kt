@@ -277,6 +277,16 @@ fun getJsToolsDefinition(): String {
                     return toolCall("swipe", params);
                 },
                 pressKey: (keyCode) => toolCall("press_key", { key_code: keyCode }),
+                /**
+                 * Run the built-in UI automation subagent.
+                 * @param intent High-level task description for the subagent.
+                 * @param maxSteps Optional maximum number of steps (default 20).
+                 */
+                runSubAgent: (intent, maxSteps) => {
+                    const params = { intent: String(intent || "") };
+                    if (maxSteps !== undefined) params.max_steps = String(maxSteps);
+                    return toolCall("run_ui_subagent", params);
+                },
             },
             // 记忆管理
             Memory: {

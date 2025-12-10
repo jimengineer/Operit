@@ -50,8 +50,7 @@ class DoubaoAIProvider(
             val toolsArray = logJson.getJSONArray("tools")
             logJson.put("tools", "[${toolsArray.length()} tools omitted for brevity]")
         }
-        logLargeString("DoubaoAIProvider", logJson.toString(4), "最终豆包请求体: ")
-
+        val sanitizedLogJson = sanitizeImageDataForLogging(logJson)
         // 使用更新后的JSONObject创建新的RequestBody
         return jsonObject.toString().toRequestBody(JSON)
     }
