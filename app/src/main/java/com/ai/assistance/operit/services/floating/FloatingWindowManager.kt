@@ -282,7 +282,8 @@ class FloatingWindowManager(
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                         WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                        WindowManager.LayoutParams.FLAG_FULLSCREEN,
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.TOP or Gravity.START
@@ -316,6 +317,17 @@ class FloatingWindowManager(
             statusIndicatorView = null
             isIndicatorAdded = false
             AppLogger.d(TAG, "Status indicator hidden.")
+        }
+    }
+
+    fun setStatusIndicatorAlpha(alpha: Float) {
+        val view = statusIndicatorView ?: return
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            view.alpha = alpha
+        } else {
+            Handler(Looper.getMainLooper()).post {
+                statusIndicatorView?.alpha = alpha
+            }
         }
     }
 

@@ -15,6 +15,7 @@ import com.ai.assistance.operit.data.model.AITool
 import com.ai.assistance.operit.data.model.FunctionType
 import com.ai.assistance.operit.data.model.ToolParameter
 import com.ai.assistance.operit.data.model.ToolResult
+import com.ai.assistance.operit.services.FloatingChatService
 import com.ai.assistance.operit.ui.common.displays.UIOperationOverlay
 import com.ai.assistance.operit.util.AppLogger
 import com.ai.assistance.operit.util.ImagePoolManager
@@ -383,25 +384,31 @@ open class StandardUITools(protected val context: Context) {
             while (step < maxSteps && !finished) {
                 step++
 
-                val userMessageBuilder = StringBuilder()
-                userMessageBuilder.appendLine("Task: $intent")
-                userMessageBuilder.appendLine("Step: $step / $maxSteps")
-
-                if (actionLogs.isNotEmpty()) {
-                    userMessageBuilder.appendLine("Previous actions (most recent first):")
-                    actionLogs.asReversed().take(5).forEach { log ->
-                        userMessageBuilder.appendLine("- $log")
-                    }
-                }
-
                 val screenshotLink = captureScreenshotForAgent()
-                if (screenshotLink != null) {
-                    userMessageBuilder.appendLine()
-                    userMessageBuilder.appendLine("[SCREENSHOT] Below is the latest screen image:")
-                    userMessageBuilder.appendLine(screenshotLink)
-                }
 
-                val userMessage = userMessageBuilder.toString().trim()
+                val screenInfo = buildString {
+                    if (screenshotLink != null) {
+                        appendLine("[SCREENSHOT] Below is the latest screen image:")
+                        appendLine(screenshotLink)
+                    } else {
+                        appendLine("No screenshot available for this step.")
+                    }
+                }.trim()
+
+                val userMessage =
+                        if (step == 1) {
+                            buildString {
+                                appendLine(intent)
+                                appendLine()
+                                appendLine(screenInfo)
+                            }.trim()
+                        } else {
+                            buildString {
+                                appendLine("** Screen Info **")
+                                appendLine()
+                                appendLine(screenInfo)
+                            }.trim()
+                        }
 
                 history.add("user" to userMessage)
 
@@ -522,19 +529,26 @@ open class StandardUITools(protected val context: Context) {
             val fileName = "ui_screenshot_${timestampFormat.format(Date())}.png"
             val file = File(screenshotDir, fileName)
 
-            val command = "screencap -p ${file.absolutePath}"
-            val result = AndroidShellExecutor.executeShellCommand(command)
-            if (!result.success) {
-                AppLogger.w(TAG, "captureScreenshotForAgent: screencap failed: ${result.stderr}")
-                return null
-            }
+            val floatingService = FloatingChatService.getInstance()
+            try {
+                // Temporarily hide the floating status indicator from screenshots
+                floatingService?.setStatusIndicatorAlpha(0f)
+                val command = "screencap -p ${file.absolutePath}"
+                val result = AndroidShellExecutor.executeShellCommand(command)
+                if (!result.success) {
+                    AppLogger.w(TAG, "captureScreenshotForAgent: screencap failed: ${result.stderr}")
+                    return null
+                }
 
-            val imageId = ImagePoolManager.addImage(file.absolutePath)
-            if (imageId == "error") {
-                AppLogger.e(TAG, "captureScreenshotForAgent: failed to register image: ${file.absolutePath}")
-                null
-            } else {
-                "<link type=\"image\" id=\"$imageId\"></link>"
+                val imageId = ImagePoolManager.addImage(file.absolutePath)
+                if (imageId == "error") {
+                    AppLogger.e(TAG, "captureScreenshotForAgent: failed to register image: ${file.absolutePath}")
+                    null
+                } else {
+                    "<link type=\"image\" id=\"$imageId\"></link>"
+                }
+            } finally {
+                floatingService?.setStatusIndicatorAlpha(1f)
             }
         } catch (e: Exception) {
             AppLogger.e(TAG, "captureScreenshotForAgent failed", e)

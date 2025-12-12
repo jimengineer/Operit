@@ -75,6 +75,13 @@ class FloatingChatService : Service(), FloatingWindowCallback {
     private val typography = mutableStateOf<Typography?>(null)
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    companion object {
+        @Volatile
+        private var instance: FloatingChatService? = null
+
+        fun getInstance(): FloatingChatService? = instance
+    }
+
     inner class LocalBinder : Binder() {
         private var closeCallback: (() -> Unit)? = null
         private var reloadCallback: (() -> Unit)? = null
@@ -132,6 +139,8 @@ class FloatingChatService : Service(), FloatingWindowCallback {
     override fun onCreate() {
         super.onCreate()
         AppLogger.d(TAG, "onCreate")
+
+        instance = this
 
         Thread.setDefaultUncaughtExceptionHandler(customExceptionHandler)
 
@@ -446,6 +455,7 @@ class FloatingChatService : Service(), FloatingWindowCallback {
         } catch (e: Exception) {
             AppLogger.e(TAG, "Error in onDestroy", e)
         }
+        instance = null
     }
 
     override fun onClose() {
@@ -562,6 +572,12 @@ class FloatingChatService : Service(), FloatingWindowCallback {
             AppLogger.d(TAG, "Window interaction set to: $enabled")
         } else {
             AppLogger.w(TAG, "WindowManager not initialized, cannot set interaction.")
+        }
+    }
+
+    fun setStatusIndicatorAlpha(alpha: Float) {
+        if (::windowManager.isInitialized) {
+            windowManager.setStatusIndicatorAlpha(alpha)
         }
     }
 
