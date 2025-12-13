@@ -8,6 +8,7 @@ enum class ApiProviderType {
         OPENAI, // OpenAI (GPT系列)
         ANTHROPIC, // Anthropic (Claude系列)
         GOOGLE, // Google (Gemini系列)
+        GEMINI_GENERIC, // Gemini通用（自定义端点）
         BAIDU, // 百度 (文心一言系列)
         ALIYUN, // 阿里云 (通义千问系列)
         XUNFEI, // 讯飞 (星火认知系列)
@@ -24,7 +25,7 @@ enum class ApiProviderType {
         LMSTUDIO, // LM Studio本地模型服务
         MNN, // MNN本地推理引擎
         PPINFRA, // 派欧云
-        OTHER // 其他提供商
+        OTHER // 其他提供商（OpenAI通用，自定义端点）
 }
 
 object ModelConfigDefaults {

@@ -45,7 +45,8 @@ object ModelListFetcher {
                 when (apiProviderType) {
                     ApiProviderType.OPENAI -> "${extractBaseUrl(apiEndpoint)}/v1/models"
                     ApiProviderType.ANTHROPIC -> "${extractBaseUrl(apiEndpoint)}/v1/models"
-                    ApiProviderType.GOOGLE -> {
+                    ApiProviderType.GOOGLE,
+                    ApiProviderType.GEMINI_GENERIC -> {
                         // 对于Gemini API，直接使用提供的端点或默认端点
                         if (apiEndpoint.contains("generativelanguage.googleapis.com")) {
                             // 如果端点已经是模型列表URL，直接使用
@@ -153,7 +154,8 @@ object ModelListFetcher {
 
                     // 根据不同供应商添加不同的认证头
                     when (apiProviderType) {
-                        ApiProviderType.GOOGLE -> {
+                        ApiProviderType.GOOGLE,
+                        ApiProviderType.GEMINI_GENERIC -> {
                             // Google Gemini API 使用 API 密钥作为查询参数
                             val urlWithKey =
                                     if (modelsUrl.contains("?")) {
@@ -218,11 +220,10 @@ object ModelListFetcher {
                                     ApiProviderType.INFINIAI,
                                     ApiProviderType.ALIPAY_BAILING,
                                     ApiProviderType.LMSTUDIO,
-                                    ApiProviderType.PPINFRA ->
-                                            parseOpenAIModelResponse(responseBody)
-                                    ApiProviderType.ANTHROPIC ->
-                                            parseAnthropicModelResponse(responseBody)
-                                    ApiProviderType.GOOGLE -> parseGoogleModelResponse(responseBody)
+                                    ApiProviderType.PPINFRA -> parseOpenAIModelResponse(responseBody)
+                                    ApiProviderType.ANTHROPIC -> parseAnthropicModelResponse(responseBody)
+                                    ApiProviderType.GOOGLE,
+                                    ApiProviderType.GEMINI_GENERIC -> parseGoogleModelResponse(responseBody)
 
                                     // 其他提供商可能需要单独的解析方法
                                     else -> parseOpenAIModelResponse(responseBody) // 默认尝试OpenAI格式

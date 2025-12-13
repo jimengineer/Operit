@@ -2574,6 +2574,7 @@
     <string name="provider_openai">OpenAI (GPT Series)</string>
     <string name="provider_anthropic">Anthropic (Claude Series)</string>
     <string name="provider_google">Google (Gemini Series)</string>
+    <string name="provider_gemini_generic">Gemini (Generic)</string>
     <string name="provider_baidu">Baidu (ERNIE Series)</string>
     <string name="provider_aliyun">Alibaba Cloud (Qwen Series)</string>
     <string name="provider_xunfei">iFLYTEK (Spark Series)</string>
@@ -2588,7 +2589,7 @@
     <string name="provider_alipay_bailing">Alipay Bailing Model</string>
     <string name="provider_lmstudio">LM Studio</string>
     <string name="provider_ppinfra">PPInfra Cloud</string>
-    <string name="provider_other">Other Providers</string>
+    <string name="provider_other">OpenAI (Generic)</string>
     <string name="select_api_provider_title">Select API Provider</string>
     <string name="search_providers">Search providers</string>
     <!-- ModelParametersSection strings -->

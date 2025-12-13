@@ -74,6 +74,7 @@ fun ModelApiSettingsSection(
             ApiProviderType.OPENAI -> "gpt-4o"
             ApiProviderType.ANTHROPIC -> "claude-3-opus-20240229"
             ApiProviderType.GOOGLE -> "gemini-2.0-flash"
+            ApiProviderType.GEMINI_GENERIC -> "gemini-2.0-flash"
             ApiProviderType.DEEPSEEK -> "deepseek-chat"
             ApiProviderType.BAIDU -> "ernie-bot-4"
             ApiProviderType.ALIYUN -> "qwen-max"
@@ -188,6 +189,8 @@ fun ModelApiSettingsSection(
             ApiProviderType.OPENAI -> "https://api.openai.com/v1/chat/completions"
             ApiProviderType.ANTHROPIC -> "https://api.anthropic.com/v1/messages"
             ApiProviderType.GOOGLE -> "https://generativelanguage.googleapis.com/v1beta/models"
+            // Gemini通用交给用户自定义端点
+            ApiProviderType.GEMINI_GENERIC -> ""
             ApiProviderType.DEEPSEEK -> "https://api.deepseek.com/v1/chat/completions"
             ApiProviderType.BAIDU ->
                     "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions"
@@ -220,6 +223,7 @@ fun ModelApiSettingsSection(
     LaunchedEffect(selectedApiProvider) {
         AppLogger.d("ModelApiSettingsSection", "API提供商改变")
         if (selectedApiProvider == ApiProviderType.OPENAI || selectedApiProvider == ApiProviderType.GOOGLE
+            || selectedApiProvider == ApiProviderType.GEMINI_GENERIC
             || selectedApiProvider == ApiProviderType.ANTHROPIC || selectedApiProvider == ApiProviderType.MISTRAL) {
             val inChina = LocationUtils.isDeviceInMainlandChina(context)
             showRegionWarning = inChina
@@ -291,6 +295,11 @@ fun ModelApiSettingsSection(
                 SettingsInfoBanner(text = stringResource(R.string.overseas_provider_warning))
             }
 
+            // 仅 OpenAI通用(OTHER) 和 Gemini通用(GEMINI_GENERIC) 允许自定义端点
+            val isGenericProvider =
+                selectedApiProvider == ApiProviderType.OTHER ||
+                selectedApiProvider == ApiProviderType.GEMINI_GENERIC
+
             if (selectedApiProvider == ApiProviderType.MNN) {
                 MnnSettingsBlock(
                         mnnForwardTypeInput = mnnForwardTypeInput,
@@ -311,6 +320,7 @@ fun ModelApiSettingsSection(
                     onValueChange = { 
                         apiEndpointInput = it.replace("\n", "").replace("\r", "").replace(" ", "")
                     },
+                        enabled = isGenericProvider,
                         keyboardOptions = KeyboardOptions(
                                 keyboardType = KeyboardType.Uri,
                                 imeAction = ImeAction.Next
@@ -511,7 +521,8 @@ fun ModelApiSettingsSection(
             }
             
             // Google Search Grounding 开关 (仅Gemini支持)
-            if (selectedApiProvider == ApiProviderType.GOOGLE) {
+            if (selectedApiProvider == ApiProviderType.GOOGLE ||
+                selectedApiProvider == ApiProviderType.GEMINI_GENERIC) {
                 SettingsSwitchRow(
                         title = stringResource(R.string.enable_google_search),
                         subtitle = stringResource(R.string.enable_google_search_desc),
@@ -839,6 +850,7 @@ private fun getProviderDisplayName(provider: ApiProviderType, context: android.c
         ApiProviderType.OPENAI -> context.getString(R.string.provider_openai)
         ApiProviderType.ANTHROPIC -> context.getString(R.string.provider_anthropic)
         ApiProviderType.GOOGLE -> context.getString(R.string.provider_google)
+        ApiProviderType.GEMINI_GENERIC -> context.getString(R.string.provider_gemini_generic)
         ApiProviderType.BAIDU -> context.getString(R.string.provider_baidu)
         ApiProviderType.ALIYUN -> context.getString(R.string.provider_aliyun)
         ApiProviderType.XUNFEI -> context.getString(R.string.provider_xunfei)
@@ -1363,6 +1375,7 @@ private fun getProviderColor(provider: ApiProviderType): androidx.compose.ui.gra
         ApiProviderType.OPENAI -> MaterialTheme.colorScheme.primary
         ApiProviderType.ANTHROPIC -> MaterialTheme.colorScheme.tertiary
         ApiProviderType.GOOGLE -> MaterialTheme.colorScheme.secondary
+        ApiProviderType.GEMINI_GENERIC -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.9f)
         ApiProviderType.BAIDU -> MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
         ApiProviderType.ALIYUN -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.8f)
         ApiProviderType.XUNFEI -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.8f)
