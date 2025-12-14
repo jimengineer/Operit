@@ -2800,6 +2800,31 @@ open class StandardFileSystemTools(protected val context: Context) {
         // 提取原始文件内容
         val originalContent = (readResult.result as? FileContentData)?.content ?: ""
 
+        if (!aiGeneratedCode.contains("[START-")) {
+            val errorMsg =
+                "如果你想覆盖这个文件，请删除文件后再写入;如果你想修改文件，请严格使用OLD/NEW的格式进行替换或者使用DELETE进行删除部分。" +
+                "所有补丁内容都必须写在 apply_file 的 content 参数里，并使用 [START-REPLACE]/[START-DELETE] + [OLD]/[NEW] 这样的结构化块，而不是直接输出整个文件的新内容进行覆盖。"
+            AppLogger.w(
+                TAG,
+                "apply_file requested full overwrite without structured edit blocks for existing file: $path. $errorMsg"
+            )
+            emit(
+                ToolResult(
+                    toolName = tool.name,
+                    success = false,
+                    result =
+                    FileOperationData(
+                        operation = "apply",
+                        path = path,
+                        successful = false,
+                        details = errorMsg
+                    ),
+                    error = errorMsg
+                )
+            )
+            return@flow
+        }
+
         // 2. 使用FileBindingService处理文件绑定
         val bindingResult =
             EnhancedAIService.applyFileBinding(context, originalContent, aiGeneratedCode)

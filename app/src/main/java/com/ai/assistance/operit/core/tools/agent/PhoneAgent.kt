@@ -8,8 +8,10 @@ import com.ai.assistance.operit.core.tools.defaultTool.standard.StandardUITools
 import com.ai.assistance.operit.data.model.AITool
 import com.ai.assistance.operit.data.model.ToolParameter
 import com.ai.assistance.operit.data.model.ToolResult
+import com.ai.assistance.operit.ui.common.displays.UIAutomationProgressOverlay
 import com.ai.assistance.operit.util.AppLogger
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import java.util.Locale
 import android.graphics.BitmapFactory
 
@@ -54,6 +56,15 @@ class PhoneAgent(
     val contextHistory: List<Pair<String, String>>
         get() = _contextHistory.toList()
 
+    private var pauseFlow: StateFlow<Boolean>? = null
+
+    private suspend fun awaitIfPaused() {
+        val flow = pauseFlow ?: return
+        while (flow.value) {
+            delay(200)
+        }
+    }
+
     /**
      * Run the agent to complete a task.
      *
@@ -65,12 +76,15 @@ class PhoneAgent(
     suspend fun run(
         task: String,
         systemPrompt: String,
-        onStep: (suspend (StepResult) -> Unit)? = null
+        onStep: (suspend (StepResult) -> Unit)? = null,
+        isPausedFlow: StateFlow<Boolean>? = null
     ): String {
         reset()
         _contextHistory.add("system" to systemPrompt)
+        pauseFlow = isPausedFlow
 
         // First step with user prompt
+        awaitIfPaused()
         var result = _executeStep(task, isFirst = true)
         onStep?.invoke(result)
 
@@ -80,14 +94,17 @@ class PhoneAgent(
 
         // Continue until finished or max steps reached
         while (_stepCount < config.maxSteps) {
+            awaitIfPaused()
             result = _executeStep(null, isFirst = false)
             onStep?.invoke(result)
 
             if (result.finished) {
+                pauseFlow = null
                 return result.message ?: "Task completed"
             }
         }
 
+        pauseFlow = null
         return "Max steps reached"
     }
 
@@ -154,6 +171,7 @@ class PhoneAgent(
         }
 
         if (parsedAction.metadata == "do") {
+            awaitIfPaused()
             val execResult = actionHandler.executeAgentAction(parsedAction)
             if (execResult.shouldFinish) {
                  return StepResult(success = execResult.success, finished = true, action = parsedAction, thinking = thinking, message = execResult.message)
@@ -287,53 +305,59 @@ class ActionHandler(
         val actionName = parsed.actionName ?: return fail(message = "Missing action name")
         val fields = parsed.fields
 
-        return when (actionName) {
-            "Launch" -> {
-                val app = fields["app"]?.takeIf { it.isNotBlank() } ?: return fail(message = "No app name specified for Launch")
-                val packageName = resolveAppPackageName(app)
-                try {
-                    val systemTools = ToolGetter.getSystemOperationTools(context)
-                    val result = systemTools.startApp(AITool("start_app", listOf(ToolParameter("package_name", packageName))))
-                    if (result.success) ok() else fail(message = result.error ?: "Failed to launch app: $packageName")
-                } catch (e: Exception) {
-                    fail(message = "Exception while launching app $packageName: ${e.message}")
+        val progressOverlay = UIAutomationProgressOverlay.getInstance(context)
+        return try {
+            progressOverlay.setOverlayAlpha(0f)
+            when (actionName) {
+                "Launch" -> {
+                    val app = fields["app"]?.takeIf { it.isNotBlank() } ?: return fail(message = "No app name specified for Launch")
+                    val packageName = resolveAppPackageName(app)
+                    try {
+                        val systemTools = ToolGetter.getSystemOperationTools(context)
+                        val result = systemTools.startApp(AITool("start_app", listOf(ToolParameter("package_name", packageName))))
+                        if (result.success) ok() else fail(message = result.error ?: "Failed to launch app: $packageName")
+                    } catch (e: Exception) {
+                        fail(message = "Exception while launching app $packageName: ${e.message}")
+                    }
                 }
+                "Tap" -> {
+                    val element = fields["element"] ?: return fail(message = "No element for Tap")
+                    val (x, y) = parseRelativePoint(element) ?: return fail(message = "Invalid coordinates for Tap: $element")
+                    val result = toolImplementations.tap(AITool("tap", listOf(ToolParameter("x", x.toString()), ToolParameter("y", y.toString()))))
+                    if (result.success) ok() else fail(message = result.error ?: "Tap failed at ($x,$y)")
+                }
+                "Type" -> {
+                    val text = fields["text"] ?: ""
+                    val result = toolImplementations.setInputText(AITool("set_input_text", listOf(ToolParameter("text", text))))
+                    if (result.success) ok() else fail(message = result.error ?: "Set input text failed")
+                }
+                "Swipe" -> {
+                    val start = fields["start"] ?: return fail(message = "Missing swipe start")
+                    val end = fields["end"] ?: return fail(message = "Missing swipe end")
+                    val (sx, sy) = parseRelativePoint(start) ?: return fail(message = "Invalid swipe start: $start")
+                    val (ex, ey) = parseRelativePoint(end) ?: return fail(message = "Invalid swipe end: $end")
+                    val params = listOf(ToolParameter("start_x", sx.toString()), ToolParameter("start_y", sy.toString()), ToolParameter("end_x", ex.toString()), ToolParameter("end_y", ey.toString()))
+                    val result = toolImplementations.swipe(AITool("swipe", params))
+                    if (result.success) ok() else fail(message = result.error ?: "Swipe failed")
+                }
+                "Back" -> {
+                    val result = toolImplementations.pressKey(AITool("press_key", listOf(ToolParameter("key_code", "KEYCODE_BACK"))))
+                    if (result.success) ok() else fail(message = result.error ?: "Back key failed")
+                }
+                "Home" -> {
+                    val result = toolImplementations.pressKey(AITool("press_key", listOf(ToolParameter("key_code", "KEYCODE_HOME"))))
+                    if (result.success) ok() else fail(message = result.error ?: "Home key failed")
+                }
+                "Wait" -> {
+                    val seconds = fields["duration"]?.replace("seconds", "")?.trim()?.toDoubleOrNull() ?: 1.0
+                    delay((seconds * 1000).toLong().coerceAtLeast(0L))
+                    ok()
+                }
+                "Take_over" -> ok(shouldFinish = true, message = fields["message"] ?: "User takeover required")
+                else -> fail(message = "Unknown action: $actionName")
             }
-            "Tap" -> {
-                val element = fields["element"] ?: return fail(message = "No element for Tap")
-                val (x, y) = parseRelativePoint(element) ?: return fail(message = "Invalid coordinates for Tap: $element")
-                val result = toolImplementations.tap(AITool("tap", listOf(ToolParameter("x", x.toString()), ToolParameter("y", y.toString()))))
-                if (result.success) ok() else fail(message = result.error ?: "Tap failed at ($x,$y)")
-            }
-            "Type" -> {
-                val text = fields["text"] ?: ""
-                val result = toolImplementations.setInputText(AITool("set_input_text", listOf(ToolParameter("text", text))))
-                if (result.success) ok() else fail(message = result.error ?: "Set input text failed")
-            }
-            "Swipe" -> {
-                val start = fields["start"] ?: return fail(message = "Missing swipe start")
-                val end = fields["end"] ?: return fail(message = "Missing swipe end")
-                val (sx, sy) = parseRelativePoint(start) ?: return fail(message = "Invalid swipe start: $start")
-                val (ex, ey) = parseRelativePoint(end) ?: return fail(message = "Invalid swipe end: $end")
-                val params = listOf(ToolParameter("start_x", sx.toString()), ToolParameter("start_y", sy.toString()), ToolParameter("end_x", ex.toString()), ToolParameter("end_y", ey.toString()))
-                val result = toolImplementations.swipe(AITool("swipe", params))
-                if (result.success) ok() else fail(message = result.error ?: "Swipe failed")
-            }
-            "Back" -> {
-                val result = toolImplementations.pressKey(AITool("press_key", listOf(ToolParameter("key_code", "KEYCODE_BACK"))))
-                if (result.success) ok() else fail(message = result.error ?: "Back key failed")
-            }
-            "Home" -> {
-                val result = toolImplementations.pressKey(AITool("press_key", listOf(ToolParameter("key_code", "KEYCODE_HOME"))))
-                if (result.success) ok() else fail(message = result.error ?: "Home key failed")
-            }
-            "Wait" -> {
-                val seconds = fields["duration"]?.replace("seconds", "")?.trim()?.toDoubleOrNull() ?: 1.0
-                delay((seconds * 1000).toLong().coerceAtLeast(0L))
-                ok()
-            }
-            "Take_over" -> ok(shouldFinish = true, message = fields["message"] ?: "User takeover required")
-            else -> fail(message = "Unknown action: $actionName")
+        } finally {
+            progressOverlay.setOverlayAlpha(1f)
         }
     }
 

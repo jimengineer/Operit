@@ -13,6 +13,7 @@ import com.ai.assistance.operit.core.tools.agent.StepResult
 import com.ai.assistance.operit.core.tools.StringResultData
 import com.ai.assistance.operit.core.tools.defaultTool.ToolGetter
 import com.ai.assistance.operit.core.tools.defaultTool.standard.StandardUITools
+import com.ai.assistance.operit.ui.common.displays.UIAutomationProgressOverlay
 import com.ai.assistance.operit.data.model.AITool
 import com.ai.assistance.operit.data.model.FunctionType
 import com.ai.assistance.operit.data.model.ToolResult
@@ -88,42 +89,73 @@ class AutoGlmViewModel(private val context: Context) : ViewModel() {
 
                 var stepIndex = 1
 
-                withContext(Dispatchers.IO) {
-                    val finalMessage = agent.run(task, systemPrompt) { stepResult: StepResult ->
-                        appendStepLog(logBuilder, stepIndex, stepResult)
-                        stepIndex++
+                val progressOverlay = UIAutomationProgressOverlay.getInstance(context)
+                val totalSteps = agentConfig.maxSteps
+                val pausedState = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+                progressOverlay.show(
+                    totalSteps,
+                    "思考中...",
+                    onCancel = { cancelTask() },
+                    onToggleTakeOver = { isPaused -> pausedState.value = isPaused }
+                )
+
+                try {
+                    withContext(Dispatchers.IO) {
+                        val finalMessage = agent.run(
+                            task = task,
+                            systemPrompt = systemPrompt,
+                            onStep = { stepResult: StepResult ->
+                                appendStepLog(logBuilder, stepIndex, stepResult)
+                                stepIndex++
+
+                                val statusText = when {
+                                    stepResult.finished -> stepResult.message ?: "已完成"
+                                    stepResult.action?.metadata == "do" -> {
+                                        val actionName = stepResult.action.actionName ?: ""
+                                        if (actionName.isNotEmpty()) "执行 ${actionName} 中..." else "执行操作中..."
+                                    }
+                                    else -> "思考中..."
+                                }
+
+                                progressOverlay.updateProgress(agent.stepCount, totalSteps, statusText)
+
+                                _uiState.value = AutoGlmUiState(
+                                    isLoading = true,
+                                    log = logBuilder.toString().trimEnd()
+                                )
+                            },
+                            isPausedFlow = pausedState
+                        )
+
+                        // 追加最终结果，使用 🎉 / ✅ 样式
+                        val finalTime = currentTimeString()
+                        fun appendFinal(line: String) {
+                            logBuilder.append("[")
+                            logBuilder.append(finalTime)
+                            logBuilder.append("] ")
+                            logBuilder.appendLine(line)
+                        }
+
+                        appendFinal("🎉 ==================================================")
+
+                        val finalLines = finalMessage.lines()
+                        if (finalLines.isNotEmpty()) {
+                            appendFinal("✅ 任务完成: ${finalLines.first().trim()}")
+                            finalLines.drop(1).forEach { line ->
+                                if (line.isNotBlank()) {
+                                    appendFinal(line.trim())
+                                }
+                            }
+                        }
 
                         _uiState.value = AutoGlmUiState(
-                            isLoading = true,
+                            isLoading = false,
                             log = logBuilder.toString().trimEnd()
                         )
                     }
-
-                    // 追加最终结果，使用 🎉 / ✅ 样式
-                    val finalTime = currentTimeString()
-                    fun appendFinal(line: String) {
-                        logBuilder.append("[")
-                        logBuilder.append(finalTime)
-                        logBuilder.append("] ")
-                        logBuilder.appendLine(line)
-                    }
-
-                    appendFinal("🎉 ==================================================")
-
-                    val finalLines = finalMessage.lines()
-                    if (finalLines.isNotEmpty()) {
-                        appendFinal("✅ 任务完成: ${finalLines.first().trim()}")
-                        finalLines.drop(1).forEach { line ->
-                            if (line.isNotBlank()) {
-                                appendFinal(line.trim())
-                            }
-                        }
-                    }
-
-                    _uiState.value = AutoGlmUiState(
-                        isLoading = false,
-                        log = logBuilder.toString().trimEnd()
-                    )
+                } finally {
+                    progressOverlay.hide()
                 }
 
             } catch (e: Exception) {

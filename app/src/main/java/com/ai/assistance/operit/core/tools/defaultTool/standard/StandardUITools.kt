@@ -19,6 +19,7 @@ import com.ai.assistance.operit.data.model.ToolParameter
 import com.ai.assistance.operit.data.model.ToolResult
 import com.ai.assistance.operit.services.FloatingChatService
 import com.ai.assistance.operit.ui.common.displays.UIOperationOverlay
+import com.ai.assistance.operit.ui.common.displays.UIAutomationProgressOverlay
 import com.ai.assistance.operit.util.AppLogger
 import com.ai.assistance.operit.util.ImagePoolManager
 import com.ai.assistance.operit.core.tools.agent.ActionHandler
@@ -26,12 +27,16 @@ import com.ai.assistance.operit.core.tools.agent.AgentConfig
 import com.ai.assistance.operit.core.tools.agent.PhoneAgent
 import com.ai.assistance.operit.core.tools.agent.ToolImplementations
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -391,7 +396,38 @@ open class StandardUITools(protected val context: Context) : ToolImplementations
                 actionHandler = actionHandler
             )
 
-            val finalMessage = agent.run(intent, systemPrompt)
+            val progressOverlay = UIAutomationProgressOverlay.getInstance(context)
+            val totalSteps = agentConfig.maxSteps
+            val job: Job? = currentCoroutineContext()[Job]
+            val pausedState = MutableStateFlow(false)
+
+            progressOverlay.show(
+                totalSteps,
+                "思考中...",
+                onCancel = { job?.cancel(CancellationException("User cancelled UI automation")) },
+                onToggleTakeOver = { isPaused -> pausedState.value = isPaused }
+            )
+
+            val finalMessage = try {
+                agent.run(
+                    task = intent,
+                    systemPrompt = systemPrompt,
+                    onStep = { stepResult ->
+                        val statusText = when {
+                            stepResult.finished -> stepResult.message ?: "已完成"
+                            stepResult.action?.metadata == "do" -> {
+                                val actionName = stepResult.action.actionName ?: ""
+                                if (actionName.isNotEmpty()) "执行 ${actionName} 中..." else "执行操作中..."
+                            }
+                            else -> "思考中..."
+                        }
+                        progressOverlay.updateProgress(agent.stepCount, totalSteps, statusText)
+                    },
+                    isPausedFlow = pausedState
+                )
+            } finally {
+                progressOverlay.hide()
+            }
 
             val success = !finalMessage.contains("Max steps reached") && !finalMessage.contains("Error")
             val executionMessage = buildString {
@@ -418,8 +454,18 @@ open class StandardUITools(protected val context: Context) : ToolImplementations
             )
 
             ToolResult(toolName = tool.name, success = true, result = resultData, error = "")
+        } catch (e: CancellationException) {
+            AppLogger.e(TAG, "UI subagent cancelled", e)
+            UIAutomationProgressOverlay.getInstance(context).hide()
+            ToolResult(
+                toolName = tool.name,
+                success = false,
+                result = StringResultData(""),
+                error = "Error running UI subagent: ${e.message}"
+            )
         } catch (e: Exception) {
             AppLogger.e(TAG, "Error running UI subagent", e)
+            UIAutomationProgressOverlay.getInstance(context).hide()
             ToolResult(
                 toolName = tool.name,
                 success = false,
@@ -469,10 +515,12 @@ open class StandardUITools(protected val context: Context) : ToolImplementations
             val file = File(screenshotDir, fileName)
 
             val floatingService = FloatingChatService.getInstance()
+            val progressOverlay = UIAutomationProgressOverlay.getInstance(context)
             try {
                 // Temporarily hide the floating status indicator from screenshots (on main thread)
                 withContext(Dispatchers.Main) {
                     floatingService?.setStatusIndicatorAlpha(0f)
+                    progressOverlay.setOverlayAlpha(0f)
                 }
                 // Give the system a brief moment to commit the alpha change to the compositor
                 delay(50)
@@ -500,6 +548,7 @@ open class StandardUITools(protected val context: Context) : ToolImplementations
             } finally {
                 withContext(Dispatchers.Main) {
                     floatingService?.setStatusIndicatorAlpha(1f)
+                    progressOverlay.setOverlayAlpha(1f)
                 }
             }
         } catch (e: Exception) {

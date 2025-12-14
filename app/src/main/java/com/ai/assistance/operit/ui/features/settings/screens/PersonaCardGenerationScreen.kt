@@ -616,8 +616,8 @@ fun PersonaCardGenerationScreen(
                                                 id = "",
                                                 name = name,
                                                 description = "",
-                                                characterSetting = "",
-                                                otherContent = "",
+                                                characterSetting = CharacterCardManager.DEFAULT_CHARACTER_SETTING,
+                                                otherContent = CharacterCardManager.DEFAULT_CHARACTER_OTHER_CONTENT,
                                                 attachedTagIds = emptyList(),
                                                 advancedCustomPrompt = "",
                                                 isDefault = false
@@ -635,6 +635,7 @@ fun PersonaCardGenerationScreen(
                         )
                     }
 
+                    // 删除角色卡确认对话框
                     if (showDeleteConfirm) {
                         AlertDialog(
                             onDismissRequest = { showDeleteConfirm = false },

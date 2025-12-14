@@ -46,6 +46,11 @@ class CharacterCardManager private constructor(private val context: Context) {
         
         // 默认角色卡ID
         const val DEFAULT_CHARACTER_CARD_ID = "default_character"
+
+        const val DEFAULT_CHARACTER_NAME = "Operit"
+        const val DEFAULT_CHARACTER_DESCRIPTION = "系统默认的角色卡配置"
+        const val DEFAULT_CHARACTER_SETTING = "你是Operit，一个全能AI助手，旨在解决用户提出的任何任务。"
+        const val DEFAULT_CHARACTER_OTHER_CONTENT = "保持有帮助的语气，并清楚地传达限制。"
         
         @Volatile
         private var INSTANCE: CharacterCardManager? = null
@@ -341,11 +346,11 @@ class CharacterCardManager private constructor(private val context: Context) {
         val createdAtKey = longPreferencesKey("character_card_${id}_created_at")
         val updatedAtKey = longPreferencesKey("character_card_${id}_updated_at")
         
-        preferences[nameKey] = "Operit"
-        preferences[descriptionKey] = "系统默认的角色卡配置"
-        preferences[characterSettingKey] = "你是Operit，一个全能AI助手，旨在解决用户提出的任何任务。"
+        preferences[nameKey] = DEFAULT_CHARACTER_NAME
+        preferences[descriptionKey] = DEFAULT_CHARACTER_DESCRIPTION
+        preferences[characterSettingKey] = DEFAULT_CHARACTER_SETTING
         preferences[openingStatementKey] = ""
-        preferences[otherContentKey] = "保持有帮助的语气，并清楚地传达限制。"
+        preferences[otherContentKey] = DEFAULT_CHARACTER_OTHER_CONTENT
         preferences[attachedTagIdsKey] = setOf<String>()
         preferences[advancedCustomPromptKey] = ""
         preferences[marksKey] = ""

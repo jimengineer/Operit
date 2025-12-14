@@ -426,8 +426,8 @@ fun ModelPromptsSettingsScreen(
                                 id = "",
                                 name = "",
                                 description = "",
-                                characterSetting = "",
-                                otherContent = "",
+                                characterSetting = CharacterCardManager.DEFAULT_CHARACTER_SETTING,
+                                otherContent = CharacterCardManager.DEFAULT_CHARACTER_OTHER_CONTENT,
                                 attachedTagIds = emptyList(),
                                 advancedCustomPrompt = "",
                                 marks = ""
@@ -886,11 +886,20 @@ fun ModelPromptsSettingsScreen(
                 ) {
                     Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = stringResource(R.string.save_successful), style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        text = stringResource(R.string.save_successful),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
         }
     }
+}
+
+enum class CharacterCardSortOption {
+    DEFAULT,
+    NAME_ASC,
+    CREATED_DESC
 }
 
 // 角色卡标签页
@@ -908,8 +917,21 @@ fun CharacterCardTab(
     onNavigateToPersonaGeneration: () -> Unit,
     onImportTavernCard: () -> Unit
 ) {
+    var sortOption by remember { mutableStateOf(CharacterCardSortOption.DEFAULT) }
+    var sortMenuExpanded by remember { mutableStateOf(false) }
+
+    val sortedCharacterCards = remember(characterCards, sortOption) {
+        when (sortOption) {
+            CharacterCardSortOption.DEFAULT -> characterCards
+            CharacterCardSortOption.NAME_ASC -> characterCards.sortedBy { it.name.lowercase() }
+            CharacterCardSortOption.CREATED_DESC -> characterCards.sortedByDescending { it.updatedAt }
+        }
+    }
+
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(12.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
@@ -923,7 +945,7 @@ fun CharacterCardTab(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                                    Text(
+                    Text(
                         text = stringResource(R.string.character_card_management),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
@@ -941,33 +963,76 @@ fun CharacterCardTab(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // 第二行：功能按钮
+                // 第二行：功能按钮 + 排序图标
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedButton(
-                        onClick = onNavigateToPersonaGeneration,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(stringResource(R.string.ai_creation), fontSize = 12.sp)
-                    }
+                        OutlinedButton(
+                            onClick = onNavigateToPersonaGeneration,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(stringResource(R.string.ai_creation), fontSize = 12.sp)
+                        }
 
-                    OutlinedButton(
-                        onClick = onImportTavernCard,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                    ) {
-                        Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(stringResource(R.string.import_tavern_card), fontSize = 12.sp)
-                            }
+                        OutlinedButton(
+                            onClick = onImportTavernCard,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(stringResource(R.string.import_tavern_card), fontSize = 12.sp)
                         }
                     }
+
+                    IconButton(
+                        onClick = { sortMenuExpanded = true }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Sort,
+                            contentDescription = stringResource(R.string.character_card_sort),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = sortMenuExpanded,
+                        onDismissRequest = { sortMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.character_card_sort_default)) },
+                            onClick = {
+                                sortOption = CharacterCardSortOption.DEFAULT
+                                sortMenuExpanded = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.character_card_sort_by_name)) },
+                            onClick = {
+                                sortOption = CharacterCardSortOption.NAME_ASC
+                                sortMenuExpanded = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.character_card_sort_by_created)) },
+                            onClick = {
+                                sortOption = CharacterCardSortOption.CREATED_DESC
+                                sortMenuExpanded = false
+                            }
+                        )
+                    }
                 }
+            }
+        }
 
         // 角色卡列表
-        items(characterCards) { characterCard ->
+        items(sortedCharacterCards) { characterCard ->
             CharacterCardItem(
                 characterCard = characterCard,
                 isActive = characterCard.id == activeCharacterCardId,
