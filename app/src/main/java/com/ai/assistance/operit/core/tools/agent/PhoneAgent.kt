@@ -1,12 +1,18 @@
 package com.ai.assistance.operit.core.tools.agent
 
 import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.os.Build
+import android.view.KeyEvent
+import androidx.core.content.FileProvider
 import com.ai.assistance.operit.api.chat.llmprovider.AIService
 import com.ai.assistance.operit.core.tools.AppListData
 import com.ai.assistance.operit.core.tools.defaultTool.ToolGetter
 import com.ai.assistance.operit.core.tools.defaultTool.standard.StandardUITools
 import com.ai.assistance.operit.core.tools.system.AndroidPermissionLevel
-import com.ai.assistance.operit.core.tools.system.AndroidShellExecutor
 import com.ai.assistance.operit.data.model.AITool
 import com.ai.assistance.operit.data.model.ToolParameter
 import com.ai.assistance.operit.data.model.ToolResult
@@ -16,14 +22,15 @@ import com.ai.assistance.operit.ui.common.displays.UIAutomationProgressOverlay
 import com.ai.assistance.operit.ui.common.displays.VirtualDisplayOverlay
 import com.ai.assistance.operit.util.AppLogger
 import com.ai.assistance.operit.util.ImagePoolManager
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.StateFlow
-import java.util.Locale
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.view.KeyEvent
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /** Configuration for the PhoneAgent. */
 data class AgentConfig(
@@ -92,14 +99,14 @@ class PhoneAgent(
      * @param onStep Optional callback invoked after each step with the StepResult.
      * @return Final message from the agent.
      */
-        suspend fun run(
+    suspend fun run(
         task: String,
         systemPrompt: String,
         onStep: (suspend (StepResult) -> Unit)? = null,
         isPausedFlow: StateFlow<Boolean>? = null
     ): String {
         val floatingService = FloatingChatService.getInstance()
-        val progressOverlay = UIAutomationProgressOverlay.getInstance(context)
+        val job = currentCoroutineContext()[Job]
 
         val hasShowerDisplayAtStart = try {
             ShowerController.getDisplayId() != null || ShowerController.getVideoSize() != null
@@ -108,20 +115,40 @@ class PhoneAgent(
             false
         }
 
+        var useShowerUi = hasShowerDisplayAtStart
+        val progressOverlay = UIAutomationProgressOverlay.getInstance(context)
+        var showerOverlay: VirtualDisplayOverlay? = if (useShowerUi) try {
+            VirtualDisplayOverlay.getInstance(context)
+        } catch (e: Exception) {
+            AppLogger.e("PhoneAgent", "Error getting VirtualDisplayOverlay instance", e)
+            null
+        } else null
+
+        val pausedMutable = isPausedFlow as? MutableStateFlow<Boolean>
+
         try {
             // Setup UI for agent run: hide window, then choose indicator based on whether Shower virtual display is active
             floatingService?.setFloatingWindowVisible(false)
-            if (hasShowerDisplayAtStart) {
+            if (useShowerUi) {
                 useShowerIndicatorForAgent(context)
             } else {
                 useFullscreenStatusIndicatorForAgent()
             }
-            progressOverlay.show(
-                config.maxSteps,
-                "Thinking...",
-                onCancel = { /* Cancellation is handled by the caller's job */ },
-                onToggleTakeOver = { isPaused -> (isPausedFlow as? kotlinx.coroutines.flow.MutableStateFlow)?.value = isPaused }
-            )
+            if (useShowerUi) {
+                showerOverlay?.showAutomationControls(
+                    totalSteps = config.maxSteps,
+                    initialStatus = "思考中...",
+                    onTogglePauseResume = { isPaused -> pausedMutable?.value = isPaused },
+                    onExit = { job?.cancel(CancellationException("User cancelled UI automation")) }
+                )
+            } else {
+                progressOverlay.show(
+                    config.maxSteps,
+                    "Thinking...",
+                    onCancel = { job?.cancel(CancellationException("User cancelled UI automation")) },
+                    onToggleTakeOver = { isPaused -> pausedMutable?.value = isPaused }
+                )
+            }
 
             reset()
             _contextHistory.add("system" to systemPrompt)
@@ -133,6 +160,66 @@ class PhoneAgent(
             AppLogger.d("PhoneAgent", "run: after awaitIfPaused for first step")
             var result = _executeStep(task, isFirst = true)
             AppLogger.d("PhoneAgent", "run: first step _executeStep completed, stepCount=$_stepCount, finished=${result.finished}")
+            val firstAction = result.action
+            val firstStatusText = when {
+                result.finished -> result.message ?: "已完成"
+                firstAction != null && firstAction.metadata == "do" -> {
+                    val actionName = firstAction.actionName ?: ""
+                    if (actionName.isNotEmpty()) "执行 ${actionName} 中..." else "执行操作中..."
+                }
+                else -> "思考中..."
+            }
+
+            if (!useShowerUi) {
+                val hasShowerNow = try {
+                    ShowerController.getDisplayId() != null || ShowerController.getVideoSize() != null
+                } catch (e: Exception) {
+                    AppLogger.e("PhoneAgent", "Error re-checking Shower virtual display state after first step", e)
+                    false
+                }
+
+                if (hasShowerNow) {
+                    useShowerUi = true
+                    try {
+                        progressOverlay.hide()
+                    } catch (e: Exception) {
+                        AppLogger.e("PhoneAgent", "Error hiding legacy UIAutomationProgressOverlay when switching to Shower UI (first step)", e)
+                    }
+
+                    try {
+                        showerOverlay = VirtualDisplayOverlay.getInstance(context)
+                    } catch (e: Exception) {
+                        AppLogger.e("PhoneAgent", "Error getting VirtualDisplayOverlay instance when switching to Shower UI (first step)", e)
+                        showerOverlay = null
+                    }
+
+                    if (showerOverlay != null) {
+                        useShowerIndicatorForAgent(context)
+                        showerOverlay?.showAutomationControls(
+                            totalSteps = config.maxSteps,
+                            initialStatus = firstStatusText,
+                            onTogglePauseResume = { isPaused -> pausedMutable?.value = isPaused },
+                            onExit = { job?.cancel(CancellationException("User cancelled UI automation")) }
+                        )
+                        showerOverlay?.updateAutomationProgress(stepCount, config.maxSteps, firstStatusText)
+                    } else {
+                        // Fallback: still use legacy overlay if Shower overlay is not available
+                        progressOverlay.show(
+                            config.maxSteps,
+                            "Thinking...",
+                            onCancel = { job?.cancel(CancellationException("User cancelled UI automation")) },
+                            onToggleTakeOver = { isPaused -> pausedMutable?.value = isPaused }
+                        )
+                        progressOverlay.updateProgress(stepCount, config.maxSteps, firstStatusText)
+                        useShowerUi = false
+                    }
+                } else {
+                    progressOverlay.updateProgress(stepCount, config.maxSteps, firstStatusText)
+                }
+            } else {
+                showerOverlay?.updateAutomationProgress(stepCount, config.maxSteps, firstStatusText)
+            }
+
             onStep?.invoke(result)
             AppLogger.d("PhoneAgent", "run: onStep callback for first step completed")
 
@@ -147,6 +234,66 @@ class PhoneAgent(
                 AppLogger.d("PhoneAgent", "run: after awaitIfPaused in loop, current stepCount=$_stepCount")
                 result = _executeStep(null, isFirst = false)
                 AppLogger.d("PhoneAgent", "run: loop _executeStep completed, stepCount=$_stepCount, finished=${result.finished}")
+                val action = result.action
+                val statusText = when {
+                    result.finished -> result.message ?: "已完成"
+                    action != null && action.metadata == "do" -> {
+                        val actionName = action.actionName ?: ""
+                        if (actionName.isNotEmpty()) "执行 ${actionName} 中..." else "执行操作中..."
+                    }
+                    else -> "思考中..."
+                }
+
+                if (!useShowerUi) {
+                    val hasShowerNow = try {
+                        ShowerController.getDisplayId() != null || ShowerController.getVideoSize() != null
+                    } catch (e: Exception) {
+                        AppLogger.e("PhoneAgent", "Error re-checking Shower virtual display state in loop", e)
+                        false
+                    }
+
+                    if (hasShowerNow) {
+                        useShowerUi = true
+                        try {
+                            progressOverlay.hide()
+                        } catch (e: Exception) {
+                            AppLogger.e("PhoneAgent", "Error hiding legacy UIAutomationProgressOverlay when switching to Shower UI (loop)", e)
+                        }
+
+                        try {
+                            showerOverlay = VirtualDisplayOverlay.getInstance(context)
+                        } catch (e: Exception) {
+                            AppLogger.e("PhoneAgent", "Error getting VirtualDisplayOverlay instance when switching to Shower UI (loop)", e)
+                            showerOverlay = null
+                        }
+
+                        if (showerOverlay != null) {
+                            useShowerIndicatorForAgent(context)
+                            showerOverlay?.showAutomationControls(
+                                totalSteps = config.maxSteps,
+                                initialStatus = statusText,
+                                onTogglePauseResume = { isPaused -> pausedMutable?.value = isPaused },
+                                onExit = { job?.cancel(CancellationException("User cancelled UI automation")) }
+                            )
+                            showerOverlay?.updateAutomationProgress(stepCount, config.maxSteps, statusText)
+                        } else {
+                            // Fallback: still use legacy overlay if Shower overlay is not available
+                            progressOverlay.show(
+                                config.maxSteps,
+                                "Thinking...",
+                                onCancel = { job?.cancel(CancellationException("User cancelled UI automation")) },
+                                onToggleTakeOver = { isPaused -> pausedMutable?.value = isPaused }
+                            )
+                            progressOverlay.updateProgress(stepCount, config.maxSteps, statusText)
+                            useShowerUi = false
+                        }
+                    } else {
+                        progressOverlay.updateProgress(stepCount, config.maxSteps, statusText)
+                    }
+                } else {
+                    showerOverlay?.updateAutomationProgress(stepCount, config.maxSteps, statusText)
+                }
+
                 onStep?.invoke(result)
                 AppLogger.d("PhoneAgent", "run: onStep callback for loop step completed, stepCount=$_stepCount")
 
@@ -163,7 +310,11 @@ class PhoneAgent(
             pauseFlow = null
             floatingService?.setFloatingWindowVisible(true)
             clearAgentIndicators(context)
-            progressOverlay.hide()
+            if (useShowerUi) {
+                showerOverlay?.hideAutomationControls()
+            } else {
+                progressOverlay.hide()
+            }
         }
     }
 
@@ -448,7 +599,13 @@ class ActionHandler(
                     AppLogger.e("ActionHandler", "Fallback screenshot tool returned no file path")
                 }
             } finally {
-                if (!showerCtx.hasShowerDisplay) {
+                val hasShowerDisplayNow = try {
+                    ShowerController.getDisplayId() != null
+                } catch (e: Exception) {
+                    AppLogger.e("ActionHandler", "Error checking Shower display state in screenshot finally", e)
+                    false
+                }
+                if (!hasShowerDisplayNow) {
                     floatingService?.setStatusIndicatorVisible(true)
                 }
                 progressOverlay.setOverlayVisible(true)
@@ -552,6 +709,9 @@ class ActionHandler(
                 try {
                     if (showerCtx.isAdbOrHigher) {
                         // High-privilege path: use Shower server + virtual display.
+                        val pm = context.packageManager
+                        val hasLaunchableTarget = pm.getLaunchIntentForPackage(packageName) != null
+
                         ensureVirtualDisplayIfAdbOrHigher()
 
                         val metrics = context.resources.displayMetrics
@@ -560,15 +720,81 @@ class ActionHandler(
                         val dpi = metrics.densityDpi
 
                         // 提升 Shower 虚拟屏幕的视频码率，改善画质与文字清晰度
-                        val created = ShowerController.ensureDisplay(width, height, dpi, bitrateKbps = 6000)
-                        val launched = if (created) ShowerController.launchApp(packageName) else false
+                        val created = ShowerController.ensureDisplay(width, height, dpi, bitrateKbps = 3000)
+                        val launched = if (created && hasLaunchableTarget) ShowerController.launchApp(packageName) else false
 
                         if (created && launched) {
                             // 成功在虚拟屏小窗启动后，切换到 Shower 边框指示并关闭全屏指示
                             useShowerIndicatorForAgent(context)
                             ok()
                         } else {
-                            fail(message = "Failed to launch app on Shower virtual display: $packageName")
+                            // 如果目标应用在 Shower 上启动失败或不存在，尝试启动桌面 fallback 应用
+                            val desktopPackage = "com.ai.assistance.operit.desktop"
+                            val requiredDesktopVersion = readRequiredDesktopVersion()
+                            val installedDesktopVersion = try {
+                                val info = pm.getPackageInfo(desktopPackage, 0)
+                                info.versionName
+                            } catch (e: Exception) {
+                                null
+                            }
+                            val desktopIntent = pm.getLaunchIntentForPackage(desktopPackage)
+                            val isDesktopInstalled = desktopIntent != null
+                            val isDesktopVersionTooLow = requiredDesktopVersion != null && isDesktopInstalled &&
+                                isVersionLower(installedDesktopVersion, requiredDesktopVersion)
+
+                            if (isDesktopInstalled && !isDesktopVersionTooLow) {
+                                // 桌面应用已安装：直接在 Shower 虚拟屏上启动桌面
+                                val desktopLaunched = ShowerController.launchApp(desktopPackage)
+                                if (desktopLaunched) {
+                                    useShowerIndicatorForAgent(context)
+                                    ok()
+                                } else {
+                                    fail(message = "Failed to launch fallback desktop app on Shower virtual display: $desktopPackage")
+                                }
+                            } else {
+                                // 桌面应用未安装：从 assets 拷贝 desktop.apk 到下载目录，并通过系统安装界面安装
+                                try {
+                                    val destDir = File("/sdcard/Download/Operit")
+                                    if (!destDir.exists()) {
+                                        destDir.mkdirs()
+                                    }
+                                    val destFile = File(destDir, "desktop.apk")
+                                    context.assets.open("desktop.apk").use { input ->
+                                        FileOutputStream(destFile).use { output ->
+                                            input.copyTo(output)
+                                        }
+                                    }
+
+                                    val apkUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                                        FileProvider.getUriForFile(
+                                            context,
+                                            "${context.packageName}.fileprovider",
+                                            destFile
+                                        )
+                                    } else {
+                                        Uri.fromFile(destFile)
+                                    }
+
+                                    val installIntent = Intent(Intent.ACTION_VIEW).apply {
+                                        setDataAndType(apkUri, "application/vnd.android.package-archive")
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        }
+                                    }
+
+                                    context.startActivity(installIntent)
+
+                                    // 交给用户通过系统安装界面完成安装，当前自动化任务到此结束
+                                    return ok(
+                                        shouldFinish = true,
+                                        message = "Desktop app is not installed. Opened system installer for fallback desktop APK; please install it, then retry the Launch action."
+                                    )
+                                } catch (e: Exception) {
+                                    AppLogger.e("PhoneAgent", "Error launching fallback desktop apk installer", e)
+                                    return fail(message = "Error launching fallback desktop installer: ${e.message}")
+                                }
+                            }
                         }
                     } else {
                         // Fallback: legacy startApp on main display.
@@ -747,6 +973,35 @@ class ActionHandler(
         val relX = parts[0].toIntOrNull() ?: return null
         val relY = parts[1].toIntOrNull() ?: return null
         return (relX / 1000.0 * screenWidth).toInt() to (relY / 1000.0 * screenHeight).toInt()
+    }
+
+    private fun readRequiredDesktopVersion(): String? {
+        return try {
+            context.assets.open("desktop_version.txt").bufferedReader().use { it.readText().trim() }
+                .ifEmpty { null }
+        } catch (e: Exception) {
+            AppLogger.e("ActionHandler", "Error reading desktop_version.txt", e)
+            null
+        }
+    }
+
+    private fun isVersionLower(installed: String?, required: String): Boolean {
+        if (installed == null) return true
+        return compareVersionStrings(installed, required) < 0
+    }
+
+    private fun compareVersionStrings(v1: String, v2: String): Int {
+        val parts1 = v1.split('.', '-', '_')
+        val parts2 = v2.split('.', '-', '_')
+        val maxLen = maxOf(parts1.size, parts2.size)
+        for (i in 0 until maxLen) {
+            val p1 = parts1.getOrNull(i)?.toIntOrNull() ?: 0
+            val p2 = parts2.getOrNull(i)?.toIntOrNull() ?: 0
+            if (p1 != p2) {
+                return p1 - p2
+            }
+        }
+        return 0
     }
 
     private fun resolveAppPackageName(app: String): String {

@@ -87,6 +87,9 @@ open class StandardUITools(protected val context: Context) : ToolImplementations
                         "滴滴出行" to "com.sdu.did.psnger",
                         // Video & Entertainment
                         "bilibili" to "tv.danmaku.bili",
+                        "哔哩哔哩" to "tv.danmaku.bili",
+                        "B站" to "tv.danmaku.bili",
+                        "b站" to "tv.danmaku.bili",
                         "抖音" to "com.ss.android.ugc.aweme",
                         "快手" to "com.smile.gifmaker",
                         "腾讯视频" to "com.tencent.qqlive",
@@ -396,38 +399,13 @@ open class StandardUITools(protected val context: Context) : ToolImplementations
                 actionHandler = actionHandler
             )
 
-            val progressOverlay = UIAutomationProgressOverlay.getInstance(context)
-            val totalSteps = agentConfig.maxSteps
-            val job: Job? = currentCoroutineContext()[Job]
             val pausedState = MutableStateFlow(false)
 
-            progressOverlay.show(
-                totalSteps,
-                "思考中...",
-                onCancel = { job?.cancel(CancellationException("User cancelled UI automation")) },
-                onToggleTakeOver = { isPaused -> pausedState.value = isPaused }
+            val finalMessage = agent.run(
+                task = intent,
+                systemPrompt = systemPrompt,
+                isPausedFlow = pausedState
             )
-
-            val finalMessage = try {
-                agent.run(
-                    task = intent,
-                    systemPrompt = systemPrompt,
-                    onStep = { stepResult ->
-                        val statusText = when {
-                            stepResult.finished -> stepResult.message ?: "已完成"
-                            stepResult.action?.metadata == "do" -> {
-                                val actionName = stepResult.action.actionName ?: ""
-                                if (actionName.isNotEmpty()) "执行 ${actionName} 中..." else "执行操作中..."
-                            }
-                            else -> "思考中..."
-                        }
-                        progressOverlay.updateProgress(agent.stepCount, totalSteps, statusText)
-                    },
-                    isPausedFlow = pausedState
-                )
-            } finally {
-                progressOverlay.hide()
-            }
 
             val success = !finalMessage.contains("Max steps reached") && !finalMessage.contains("Error")
             val executionMessage = buildString {
@@ -456,7 +434,6 @@ open class StandardUITools(protected val context: Context) : ToolImplementations
             ToolResult(toolName = tool.name, success = true, result = resultData, error = "")
         } catch (e: CancellationException) {
             AppLogger.e(TAG, "UI subagent cancelled", e)
-            UIAutomationProgressOverlay.getInstance(context).hide()
             ToolResult(
                 toolName = tool.name,
                 success = false,
@@ -465,7 +442,6 @@ open class StandardUITools(protected val context: Context) : ToolImplementations
             )
         } catch (e: Exception) {
             AppLogger.e(TAG, "Error running UI subagent", e)
-            UIAutomationProgressOverlay.getInstance(context).hide()
             ToolResult(
                 toolName = tool.name,
                 success = false,

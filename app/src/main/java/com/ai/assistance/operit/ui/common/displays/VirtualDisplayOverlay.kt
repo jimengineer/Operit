@@ -37,7 +37,10 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
@@ -90,6 +93,7 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
     private var displayId: Int? = null
     private var isFullscreen by mutableStateOf(false)
     private var isSnapped by mutableStateOf(false)
+    private var snappedToRight by mutableStateOf(false)
     private var animator: android.animation.ValueAnimator? = null
     private var lastWindowX: Int = 0
     private var lastWindowY: Int = 0
@@ -98,6 +102,20 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
     private var previewPath by mutableStateOf<String?>(null)
     private var controlsVisible by mutableStateOf(false)
     private var rainbowBorderVisible by mutableStateOf(false)
+    private var automationCurrentStep by mutableStateOf<Int?>(null)
+    private var automationTotalSteps by mutableStateOf<Int?>(null)
+    private var automationStatusText by mutableStateOf<String?>(null)
+    private var automationIsPaused by mutableStateOf(false)
+    private var automationVisible by mutableStateOf(false)
+    private var automationOnTogglePauseResume: ((Boolean) -> Unit)? = null
+    private var automationOnExit: (() -> Unit)? = null
+    // Fixed left control panel width (in px) added on top of the original video width.
+    // The video region itself still uses 0.4x of the screen width; this extra width
+    // is only used to host controls without changing the video size.
+    private val automationPanelWidthPx: Int by lazy {
+        (56 * context.resources.displayMetrics.density).roundToInt()
+    }
+    private val automationPanelWidthDp = 56.dp
 
     private fun runOnMainThread(action: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -172,6 +190,43 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
         }
     }
 
+    fun showAutomationControls(
+        totalSteps: Int,
+        initialStatus: String,
+        onTogglePauseResume: (Boolean) -> Unit,
+        onExit: () -> Unit
+    ) {
+        runOnMainThread {
+            automationTotalSteps = totalSteps
+            automationCurrentStep = 1
+            automationStatusText = initialStatus
+            automationIsPaused = false
+            automationOnTogglePauseResume = onTogglePauseResume
+            automationOnExit = onExit
+            automationVisible = true
+        }
+    }
+
+    fun updateAutomationProgress(currentStep: Int, totalSteps: Int, statusText: String) {
+        runOnMainThread {
+            automationTotalSteps = totalSteps
+            automationCurrentStep = if (currentStep <= 0) 1 else currentStep
+            automationStatusText = statusText
+        }
+    }
+
+    fun hideAutomationControls() {
+        runOnMainThread {
+            automationVisible = false
+            automationOnTogglePauseResume = null
+            automationOnExit = null
+            automationCurrentStep = null
+            automationTotalSteps = null
+            automationStatusText = null
+            automationIsPaused = false
+        }
+    }
+
     fun hide() {
         runOnMainThread {
             try {
@@ -215,19 +270,45 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
     }
 
     private fun snapToEdge(forceSnap: Boolean = false) {
-        // 现在 snapToEdge 仅用于将小窗缩小为悬浮球，不再“吸附”到屏幕边缘
         runOnMainThread {
-            if (!isSnapped) {
+            val params = layoutParams ?: return@runOnMainThread
+            val metrics = context.resources.displayMetrics
+            val statusBarHeight = getStatusBarHeight()
+            if (!isSnapped || forceSnap) {
                 isSnapped = true
-                val params = layoutParams ?: return@runOnMainThread
-                // 在当前位置缩放成圆形小球
-                animateToPosition(params.x, params.y, isSnapping = true)
+                lastWindowX = params.x
+                lastWindowY = params.y
+
+                val screenWidth = metrics.widthPixels
+                val centerX = params.x + params.width / 2
+                snappedToRight = centerX >= screenWidth / 2
+
+                val snappedWidthPx = (36 * context.resources.displayMetrics.density).roundToInt()
+                val snappedHeightPx = (48 * context.resources.displayMetrics.density).roundToInt()
+                val targetX = if (snappedToRight) screenWidth - snappedWidthPx else 0
+                val maxY = metrics.heightPixels - snappedHeightPx
+                val targetY = params.y.coerceIn(statusBarHeight, maxY)
+                animateToPosition(targetX, targetY, isSnapping = true)
             }
         }
     }
 
     private fun animateToDefaultPosition() {
-        animateToPosition(lastWindowX, lastWindowY, isSnapping = false)
+        val metrics = context.resources.displayMetrics
+        val statusBarHeight = getStatusBarHeight()
+        val params = layoutParams ?: return
+        val videoWidth = (lastWindowWidth * 0.4f).toInt()
+        val videoHeight = (lastWindowHeight * 0.4f).toInt()
+        val restoredWidth = videoWidth + automationPanelWidthPx
+        val restoredHeight = videoHeight
+
+        val maxX = metrics.widthPixels - restoredWidth
+        val maxY = metrics.heightPixels - restoredHeight
+
+        val targetX = lastWindowX.coerceIn(0, maxX)
+        val targetY = lastWindowY.coerceIn(statusBarHeight, maxY)
+
+        animateToPosition(targetX, targetY, isSnapping = false)
     }
 
     private fun animateToPosition(targetX: Int, targetY: Int, isSnapping: Boolean) {
@@ -239,11 +320,14 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
         val startWidth = params.width
         val startHeight = params.height
         val metrics = context.resources.displayMetrics
-        val snappedSize = (60 * metrics.density).toInt()
+        val snappedWidth = (36 * metrics.density).roundToInt()
+        val snappedHeight = (48 * metrics.density).roundToInt()
         val (endWidth, endHeight) = if (isSnapping) {
-            snappedSize to snappedSize
+            snappedWidth to snappedHeight
         } else {
-            (lastWindowWidth * 0.4f).toInt() to (lastWindowHeight * 0.4f).toInt()
+            val videoWidth = (lastWindowWidth * 0.4f).toInt()
+            val videoHeight = (lastWindowHeight * 0.4f).toInt()
+            (videoWidth + automationPanelWidthPx) to videoHeight
         }
         animator?.cancel()
         animator = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
@@ -273,8 +357,10 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
         if (lastWindowWidth == 0 || lastWindowHeight == 0) {
             lastWindowWidth = metrics.widthPixels
             lastWindowHeight = (metrics.heightPixels - statusBarHeight).coerceAtLeast(1)
-            params.width = (lastWindowWidth * 0.4f).toInt()
-            params.height = (lastWindowHeight * 0.4f).toInt()
+            val videoWidth = (lastWindowWidth * 0.4f).toInt()
+            val videoHeight = (lastWindowHeight * 0.4f).toInt()
+            params.width = videoWidth + automationPanelWidthPx
+            params.height = videoHeight
             params.x = ((metrics.widthPixels - params.width) / 2f).toInt()
             params.y = statusBarHeight + ((lastWindowHeight - params.height) / 2f).toInt()
             lastWindowX = params.x
@@ -286,8 +372,13 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
             params.x = 0
             params.y = 0
         } else {
-            params.width = (lastWindowWidth * 0.4f).toInt()
-            params.height = (lastWindowHeight * 0.4f).toInt()
+            // Small window: keep the video region at 0.4x of the screen width, and
+            // add a fixed-width left control panel. This keeps the video size and
+            // aspect ratio identical to the previous behavior.
+            val videoWidth = (lastWindowWidth * 0.4f).toInt()
+            val videoHeight = (lastWindowHeight * 0.4f).toInt()
+            params.width = videoWidth + automationPanelWidthPx
+            params.height = videoHeight
             params.x = lastWindowX
             params.y = lastWindowY
         }
@@ -303,9 +394,34 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
         val view = overlayView ?: return
         val params = layoutParams ?: return
         if (isFullscreen) return
-        // 悬浮球模式下也允许普通拖动，不再改变缩放状态
-        params.x += dx.toInt()
-        params.y += dy.toInt()
+        if (isSnapped) {
+            val metrics = context.resources.displayMetrics
+            val statusBarHeight = getStatusBarHeight()
+            val snappedSize = params.height
+            val maxY = metrics.heightPixels - snappedSize
+            params.y = (params.y + dy.toInt()).coerceIn(statusBarHeight, maxY)
+            val screenWidth = metrics.widthPixels
+            params.x = if (snappedToRight) screenWidth - params.width else 0
+            // 保留 lastWindowX 为缩小前的小窗 X，只更新垂直位置用于恢复时的 Y
+            lastWindowY = params.y
+            try {
+                wm.updateViewLayout(view, params)
+            } catch (e: Exception) {
+                AppLogger.e("VirtualDisplayOverlay", "Error moving snapped overlay via moveWindowBy", e)
+            }
+            return
+        }
+        val metrics = context.resources.displayMetrics
+        val statusBarHeight = getStatusBarHeight()
+        val newX = params.x + dx.toInt()
+        val newY = params.y + dy.toInt()
+
+        val maxX = metrics.widthPixels - params.width
+        val maxY = metrics.heightPixels - params.height
+
+        params.x = newX.coerceIn(0, maxX)
+        params.y = newY.coerceIn(statusBarHeight, maxY)
+
         lastWindowX = params.x
         lastWindowY = params.y
         try {
@@ -378,7 +494,7 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
                         onTap = { offset ->
                             if (snapped) {
                                 isSnapped = false
-                                updateLayoutParams()
+                                animateToDefaultPosition()
                             } else if (isFullscreen) {
                                 val pt = mapOffsetToRemote(offset, overlaySize, ShowerController.getVideoSize())
                                 if (pt != null) {
@@ -393,7 +509,7 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
                         }
                     )
                 }
-                .clip(if (snapped) CircleShape else RoundedCornerShape(0.dp))
+                .clip(RoundedCornerShape(0.dp))
         ) {
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -410,36 +526,31 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
                         }
                     }
                     if (id == 0 && hasShowerDisplay) {
-                        AndroidView(
-                            modifier = if (snapped) Modifier.size(1.dp) else Modifier.fillMaxSize(),
-                            factory = { ctx -> ShowerSurfaceView(ctx) }
-                        )
-                        if (snapped) {
-                            ShowerSiriBall(
-                                onMove = { dx, dy -> moveWindowBy(dx, dy) },
-                                onClick = {
-                                    isSnapped = false
-                                    updateLayoutParams()
-                                }
-                            )
-                        } else {
-                            LaunchedEffect(controlsVisible) {
-                                if (controlsVisible) {
-                                    delay(3000)
-                                    controlsVisible = false
-                                }
-                            }
-                            if (controlsVisible && !isFullscreen) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.3f))
+                        if (isFullscreen) {
+                            // 全屏模式：保持原来的视频 fillMaxSize 布局
+                            Box(
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                AndroidView(
+                                    modifier = Modifier.fillMaxSize(),
+                                    factory = { ctx -> ShowerSurfaceView(ctx) }
                                 )
-                            }
-                            if (rainbowBorderVisible) {
-                                RainbowStatusBorderOverlay()
-                            }
-                            if (isFullscreen) {
+                                LaunchedEffect(controlsVisible) {
+                                    if (controlsVisible) {
+                                        delay(3000)
+                                        controlsVisible = false
+                                    }
+                                }
+                                if (controlsVisible && !isFullscreen) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.3f))
+                                    )
+                                }
+                                if (rainbowBorderVisible) {
+                                    RainbowStatusBorderOverlay()
+                                }
                                 // Fullscreen: top-right Windows-like controls, small white icons on pill background
                                 Box(
                                     modifier = Modifier
@@ -457,7 +568,6 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
                                         // Minimize (映射到贴边，类似最小化到侧边)
                                         IconButton(
                                             onClick = {
-                                                // 全屏 -> 悬浮球：仅缩小为圆形小球，不做边缘吸附
                                                 toggleFullScreen()
                                                 snapToEdge()
                                             },
@@ -508,21 +618,126 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
                                         }
                                     }
                                 }
-                            } else if (controlsVisible) {
-                                // Small window: Centered, vertical column
-                                Column(
-                                    modifier = Modifier.align(Alignment.Center),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                            }
+                        } else {
+                            if (snapped) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize()
                                 ) {
-                                    IconButton(onClick = { snapToEdge() }) {
-                                        Icon(imageVector = Icons.Outlined.Minimize, contentDescription = "Minimize to ball", modifier = Modifier.size(32.dp))
+                                    // 保持 ShowerSurfaceView 附着但几乎不可见，仅用于维持渲染管线
+                                    AndroidView(
+                                        modifier = Modifier.size(1.dp),
+                                        factory = { ctx -> ShowerSurfaceView(ctx) }
+                                    )
+
+                                    val handleShape = if (snappedToRight) {
+                                        RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp, topEnd = 0.dp, bottomEnd = 0.dp)
+                                    } else {
+                                        RoundedCornerShape(topStart = 0.dp, bottomStart = 0.dp, topEnd = 12.dp, bottomEnd = 12.dp)
                                     }
-                                    IconButton(onClick = { toggleFullScreen() }) {
-                                        Icon(imageVector = Icons.Filled.Fullscreen, contentDescription = "Toggle Fullscreen", modifier = Modifier.size(32.dp))
+                                    val arrowIcon = if (snappedToRight) Icons.Filled.ChevronLeft else Icons.Filled.ChevronRight
+
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(
+                                                color = Color.Gray.copy(alpha = 0.85f),
+                                                shape = handleShape
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = arrowIcon,
+                                            contentDescription = "Restore",
+                                            modifier = Modifier.size(18.dp),
+                                            tint = Color.White
+                                        )
                                     }
-                                    IconButton(onClick = { hide() }) {
-                                        Icon(imageVector = Icons.Filled.Close, contentDescription = "Close", modifier = Modifier.size(32.dp))
+                                }
+                            } else {
+                                // 小窗模式：左侧为固定宽度控制栏，右侧为原始大小的视频区域
+                                Row(
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    // Left control panel area (fixed dp width)
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .width(automationPanelWidthDp)
+                                    ) {
+                                        if (automationVisible) {
+                                            val step = automationCurrentStep
+                                            val total = automationTotalSteps
+                                            if (step != null && total != null) {
+                                                AutomationControlBar(
+                                                    currentStep = step,
+                                                    totalSteps = total,
+                                                    isPaused = automationIsPaused,
+                                                    onTogglePauseResume = { newPaused ->
+                                                        automationIsPaused = newPaused
+                                                        automationOnTogglePauseResume?.invoke(newPaused)
+                                                    },
+                                                    onExit = { automationOnExit?.invoke() }
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    // Right video region: keep the same size as before (matches 0.4x screen width)
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .weight(1f)
+                                    ) {
+                                        AndroidView(
+                                            modifier = Modifier.fillMaxSize(),
+                                            factory = { ctx -> ShowerSurfaceView(ctx) }
+                                        )
+
+                                        LaunchedEffect(controlsVisible) {
+                                            if (controlsVisible) {
+                                                delay(3000)
+                                                controlsVisible = false
+                                            }
+                                        }
+                                        if (controlsVisible) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.3f))
+                                            )
+                                            // Small window: Centered, vertical column (restore original layout)
+                                            Column(
+                                                modifier = Modifier.align(Alignment.Center),
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                IconButton(onClick = { snapToEdge() }) {
+                                                    Icon(
+                                                        imageVector = Icons.Outlined.Minimize,
+                                                        contentDescription = "Minimize to ball",
+                                                        modifier = Modifier.size(32.dp)
+                                                    )
+                                                }
+                                                IconButton(onClick = { toggleFullScreen() }) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Fullscreen,
+                                                        contentDescription = "Toggle Fullscreen",
+                                                        modifier = Modifier.size(32.dp)
+                                                    )
+                                                }
+                                                IconButton(onClick = { hide() }) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Close,
+                                                        contentDescription = "Close",
+                                                        modifier = Modifier.size(32.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        if (rainbowBorderVisible) {
+                                            RainbowStatusBorderOverlay()
+                                        }
                                     }
                                 }
                             }
@@ -535,6 +750,61 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
                         )
                     }
                 }
+        }
+    }
+    @Composable
+    private fun AutomationControlBar(
+        currentStep: Int,
+        totalSteps: Int,
+        isPaused: Boolean,
+        onTogglePauseResume: (Boolean) -> Unit,
+        onExit: () -> Unit
+    ) {
+        Card(
+            modifier = Modifier
+                .wrapContentWidth()
+                .padding(horizontal = 2.dp, vertical = 2.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+                contentColor = MaterialTheme.colorScheme.onSurface
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                // 只保留简单的步骤进度文案，例如 "3/20"
+                Box(
+                    modifier = Modifier.size(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "$currentStep/$totalSteps",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                // 垂直排列：上面是暂停/继续，下面是退出任务的 X
+                IconButton(onClick = { onTogglePauseResume(!isPaused) }) {
+                    Icon(
+                        imageVector = if (isPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                        contentDescription = if (isPaused) "Resume automation" else "Pause automation",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                IconButton(onClick = onExit) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Stop automation",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
         }
     }
 
@@ -642,305 +912,3 @@ private fun RainbowStatusBorderOverlay() {
         }
     }
 }
-
-// ---------------------------------------------------------------------------------------------------------------------
-// 精简版 SiriBall：仅保留视觉与手势（拖动 + 点击），不依赖 FloatContext / 语音 / AI 状态
-// ---------------------------------------------------------------------------------------------------------------------
-
-@Composable
-private fun ShowerSiriBall(
-    onMove: (Float, Float) -> Unit,
-    onClick: () -> Unit
-) {
-    // Siri 配色
-    val mainColor = Color(0xFF00FFFF) // Cyan
-    val accentColor1 = Color(0xFFFF00FF) // Magenta
-    val accentColor2 = Color(0xFFF07B3F) // Orange
-    val accentColor3 = Color(0xFF00FF00) // Lime
-
-    // 按压状态（仅用于视觉缩放）
-    var isPressed by remember { mutableStateOf(false) }
-    val pressScale by animateFloatAsState(
-        targetValue = if (isPressed) 0.85f else 1.0f,
-        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
-        label = "vd_pressScale"
-    )
-
-    // 无限动画：旋转 / 呼吸 / 外圈波纹
-    val infiniteTransition = rememberInfiniteTransition(label = "vd_siri")
-
-    val rotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(15000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "vd_rotation"
-    )
-
-    val breathe by infiniteTransition.animateFloat(
-        initialValue = 0.95f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(3000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "vd_breathe"
-    )
-
-    val ripple1Scale by infiniteTransition.animateFloat(
-        initialValue = 1.0f,
-        targetValue = 1.2f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2500, easing = LinearOutSlowInEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "vd_ripple1Scale"
-    )
-    val ripple1Alpha by infiniteTransition.animateFloat(
-        initialValue = 0.5f,
-        targetValue = 0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2500, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "vd_ripple1Alpha"
-    )
-
-    val ripple2Scale by infiniteTransition.animateFloat(
-        initialValue = 1.0f,
-        targetValue = 1.2f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2500, easing = LinearOutSlowInEasing),
-            repeatMode = RepeatMode.Restart,
-            initialStartOffset = StartOffset(833)
-        ),
-        label = "vd_ripple2Scale"
-    )
-    val ripple2Alpha by infiniteTransition.animateFloat(
-        initialValue = 0.5f,
-        targetValue = 0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2500, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-            initialStartOffset = StartOffset(833)
-        ),
-        label = "vd_ripple2Alpha"
-    )
-
-    val ripple3Scale by infiniteTransition.animateFloat(
-        initialValue = 1.0f,
-        targetValue = 1.2f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2500, easing = LinearOutSlowInEasing),
-            repeatMode = RepeatMode.Restart,
-            initialStartOffset = StartOffset(1666)
-        ),
-        label = "vd_ripple3Scale"
-    )
-    val ripple3Alpha by infiniteTransition.animateFloat(
-        initialValue = 0.5f,
-        targetValue = 0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2500, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-            initialStartOffset = StartOffset(1666)
-        ),
-        label = "vd_ripple3Alpha"
-    )
-
-    // 粒子系统：沿用 SiriBall 的 BallParticles，实现 3D 轨迹
-    val particleSystem = rememberParticleSystem()
-    particleSystem.UpdateEffect(isPressed)
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragStart = {
-                        isPressed = true
-                    },
-                    onDragEnd = {
-                        isPressed = false
-                    },
-                    onDragCancel = {
-                        isPressed = false
-                    },
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-                        onMove(dragAmount.x, dragAmount.y)
-                    }
-                )
-            }
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = { onClick() }
-                )
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val center = Offset(size.width / 2f, size.height / 2f)
-            val baseRadius = (size.minDimension / 2f) * pressScale
-
-            // 0. 后景粒子
-            with(particleSystem) {
-                drawBackParticles(center, baseRadius * 0.5f)
-            }
-
-            // 1. 外圈音波（三层）
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color.Transparent,
-                        mainColor.copy(alpha = ripple3Alpha * 0.15f),
-                        Color.Transparent
-                    ),
-                    center = center,
-                    radius = baseRadius * ripple3Scale
-                ),
-                center = center,
-                radius = baseRadius * ripple3Scale
-            )
-
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color.Transparent,
-                        accentColor1.copy(alpha = ripple2Alpha * 0.2f),
-                        Color.Transparent
-                    ),
-                    center = center,
-                    radius = baseRadius * ripple2Scale
-                ),
-                center = center,
-                radius = baseRadius * ripple2Scale
-            )
-
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color.Transparent,
-                        accentColor3.copy(alpha = ripple1Alpha * 0.25f),
-                        Color.Transparent
-                    ),
-                    center = center,
-                    radius = baseRadius * ripple1Scale
-                ),
-                center = center,
-                radius = baseRadius * ripple1Scale
-            )
-
-            // 2. 底部光晕
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        mainColor.copy(alpha = 0.3f),
-                        accentColor1.copy(alpha = 0.2f),
-                        Color.Transparent
-                    ),
-                    center = center,
-                    radius = baseRadius * breathe * 0.7f
-                ),
-                center = center,
-                radius = baseRadius * breathe * 0.7f,
-                blendMode = BlendMode.Screen
-            )
-
-            // 3. 流动彩色光斑（4 个）
-            fun drawColorBlob(
-                angleDeg: Float,
-                distance: Float,
-                color: Color,
-                sizeFactor: Float
-            ) {
-                val rad = (rotation + angleDeg) * PI.toFloat() / 180f
-                val blobCenter = Offset(
-                    center.x + distance * cos(rad),
-                    center.y + distance * sin(rad)
-                )
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            color.copy(alpha = 0.8f),
-                            color.copy(alpha = 0.5f),
-                            color.copy(alpha = 0.2f),
-                            Color.Transparent
-                        ),
-                        center = blobCenter,
-                        radius = baseRadius * sizeFactor
-                    ),
-                    center = blobCenter,
-                    radius = baseRadius * sizeFactor,
-                    blendMode = BlendMode.Screen
-                )
-            }
-
-            drawColorBlob(0f, baseRadius * 0.2f * breathe, mainColor, 0.7f)
-            drawColorBlob(90f, baseRadius * 0.25f * breathe, accentColor1, 0.65f)
-            drawColorBlob(180f, baseRadius * 0.22f * breathe, accentColor2, 0.6f)
-            drawColorBlob(270f, baseRadius * 0.23f * breathe, accentColor3, 0.68f)
-
-            // 4. 中心核心高光
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color.White.copy(alpha = 0.7f),
-                        mainColor.copy(alpha = 0.6f),
-                        accentColor1.copy(alpha = 0.5f),
-                        Color.Transparent
-                    ),
-                    center = center,
-                    radius = baseRadius * 0.65f * breathe
-                ),
-                center = center,
-                radius = baseRadius * 0.65f * breathe,
-                blendMode = BlendMode.Screen
-            )
-
-            // 5. 玻璃高光
-            val highlightCenter = Offset(
-                center.x - baseRadius * 0.25f,
-                center.y - baseRadius * 0.25f
-            )
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color.White.copy(alpha = 0.5f),
-                        Color.White.copy(alpha = 0.25f),
-                        Color.Transparent
-                    ),
-                    center = highlightCenter,
-                    radius = baseRadius * 0.35f
-                ),
-                center = highlightCenter,
-                radius = baseRadius * 0.35f,
-                blendMode = BlendMode.Screen
-            )
-
-            // 6. 软边界
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color.Transparent,
-                        Color.White.copy(alpha = 0.05f),
-                        Color.White.copy(alpha = 0.15f),
-                        Color.Transparent
-                    ),
-                    center = center,
-                    radius = baseRadius * breathe
-                ),
-                center = center,
-                radius = baseRadius * breathe
-            )
-
-            // 7. 前景粒子
-            with(particleSystem) {
-                drawFrontParticles(center, baseRadius * 0.5f)
-            }
-        }
-    }
-}
-
