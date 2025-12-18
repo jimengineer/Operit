@@ -105,6 +105,18 @@ export interface FileContentData {
 }
 
 /**
+ * Binary file content data (Base64 encoded)
+ */
+export interface BinaryFileContentData {
+    path: string;
+    /** Base64 encoded content of the file */
+    contentBase64: string;
+    /** File size in bytes */
+    size: number;
+    toString(): string;
+}
+
+/**
  * File part content data
  */
 export interface FilePartContentData {
@@ -572,6 +584,10 @@ export interface DirectoryListingResult extends BaseResult {
 
 export interface FileContentResult extends BaseResult {
     data: FileContentData;
+}
+
+export interface BinaryFileContentResult extends BaseResult {
+    data: BinaryFileContentData;
 }
 
 export interface FilePartContentResult extends BaseResult {

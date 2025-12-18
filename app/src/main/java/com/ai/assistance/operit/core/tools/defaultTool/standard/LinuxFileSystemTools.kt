@@ -4,6 +4,7 @@ import android.content.Context
 import com.ai.assistance.operit.util.AppLogger
 import com.ai.assistance.operit.core.tools.DirectoryListingData
 import com.ai.assistance.operit.core.tools.FileContentData
+import com.ai.assistance.operit.core.tools.BinaryFileContentData
 import com.ai.assistance.operit.core.tools.FileExistsData
 import com.ai.assistance.operit.core.tools.FileOperationData
 import com.ai.assistance.operit.core.tools.FilePartContentData
@@ -185,6 +186,73 @@ class LinuxFileSystemTools(context: Context) : StandardFileSystemTools(context) 
                 success = false,
                 result = StringResultData(""),
                 error = "Error reading file: ${e.message}"
+            )
+        }
+    }
+
+    /** 读取Linux二进制文件内容并返回Base64编码数据 */
+    override suspend fun readFileBinary(tool: AITool): ToolResult {
+        val path = tool.parameters.find { it.name == "path" }?.value ?: ""
+        PathValidator.validateLinuxPath(path, tool.name)?.let { return it }
+
+        if (path.isBlank()) {
+            return ToolResult(
+                toolName = tool.name,
+                success = false,
+                result = StringResultData(""),
+                error = "Path parameter is required"
+            )
+        }
+
+        return try {
+            if (!fs.exists(path)) {
+                return ToolResult(
+                    toolName = tool.name,
+                    success = false,
+                    result = StringResultData(""),
+                    error = "File does not exist: $path"
+                )
+            }
+
+            if (!fs.isFile(path)) {
+                return ToolResult(
+                    toolName = tool.name,
+                    success = false,
+                    result = StringResultData(""),
+                    error = "Path is not a file: $path"
+                )
+            }
+
+            val bytes = fs.readFileBytes(path)
+            if (bytes == null) {
+                return ToolResult(
+                    toolName = tool.name,
+                    success = false,
+                    result = StringResultData(""),
+                    error = "Failed to read file bytes: $path"
+                )
+            }
+
+            val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+            val size = fs.getFileSize(path)
+
+            ToolResult(
+                toolName = tool.name,
+                success = true,
+                result = BinaryFileContentData(
+                    path = path,
+                    contentBase64 = base64,
+                    size = size
+                ),
+                error = ""
+            )
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "Error reading binary file", e)
+            ToolResult(
+                toolName = tool.name,
+                success = false,
+                result = StringResultData(""),
+                error = "Error reading binary file: ${e.message}"
             )
         }
     }

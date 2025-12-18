@@ -5,7 +5,7 @@
  */
 
 import {
-    DirectoryListingData, FileContentData, FileOperationData, FileExistsData,
+    DirectoryListingData, FileContentData, BinaryFileContentData, FileOperationData, FileExistsData,
     FindFilesResultData, FileInfoData, FileConversionResultData, FileFormatConversionsResultData,
     HttpResponseData, VisitWebResultData,
     SleepResultData, SystemSettingData, AppOperationData, AppListData,
@@ -26,6 +26,8 @@ export interface ToolResultMap {
     'read_file': FileContentData;
     'read_file_part': FilePartContentData;
     'read_file_full': FileContentData;
+    'read_file_binary': BinaryFileContentData;
+
     'write_file': FileOperationData;
     'delete_file': FileOperationData;
     'file_exists': FileExistsData;

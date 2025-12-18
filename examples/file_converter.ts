@@ -202,6 +202,10 @@ const fileConverter = (function () {
             if (!(await Tools.Files.exists(outputJpg)).exists) {
                 throw new Error("JPG file not created.");
             }
+
+            // Verify that readBinary can read the converted image as Base64
+            const jpgBinary = await Tools.Files.readBinary(outputJpg);
+            console.log("ReadBinary success: size=", jpgBinary.size, "bytes, base64 length=", jpgBinary.contentBase64.length);
         } catch (e: any) {
             console.error("Image conversion test failed:", e.message);
         }

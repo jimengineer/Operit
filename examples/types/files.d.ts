@@ -3,10 +3,11 @@
  */
 
 import {
-    DirectoryListingData, FileContentData, FileOperationData, FileExistsData,
+    DirectoryListingData, FileContentData, BinaryFileContentData, FileOperationData, FileExistsData,
     FindFilesResultData, FileInfoData, FilePartContentData,
     FileApplyResultData, GrepResultData
 } from './results';
+
 import { FFmpegVideoCodec, FFmpegAudioCodec, FFmpegResolution, FFmpegBitrate } from './ffmpeg';
 
 /**
@@ -67,11 +68,11 @@ export namespace Files {
     function writeBinary(path: string, base64Content: string, environment?: FileEnvironment): Promise<FileOperationData>;
 
     /**
-     * Read binary file content as base64 string
+     * Read binary file content as a structured result with Base64 data
      * @param path - Path to file
      * @param environment - Execution environment ("android" or "linux"), default "android"
      */
-    function readBinary(path: string, environment?: FileEnvironment): Promise<string>;
+    function readBinary(path: string, environment?: FileEnvironment): Promise<BinaryFileContentData>;
 
     /**
      * Delete a file or directory

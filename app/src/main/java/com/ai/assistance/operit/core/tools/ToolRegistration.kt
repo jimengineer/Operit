@@ -550,6 +550,18 @@ fun registerAllTools(handler: AIToolHandler, context: Context) {
             executor = { tool -> runBlocking(Dispatchers.IO) { fileSystemTools.readFileFull(tool) } }
     )
 
+    // 读取二进制文件内容（Base64编码）
+    handler.registerTool(
+            name = "read_file_binary",
+            descriptionGenerator = { tool ->
+                val path = tool.parameters.find { it.name == "path" }?.value ?: ""
+                val environment = tool.parameters.find { it.name == "environment" }?.value
+                val envInfo = if (!environment.isNullOrBlank() && environment != "android") " (环境: $environment)" else ""
+                "读取二进制文件内容: $path$envInfo"
+            },
+            executor = { tool -> runBlocking(Dispatchers.IO) { fileSystemTools.readFileBinary(tool) } }
+    )
+
     // 写入文件
     handler.registerTool(
             name = "write_file",

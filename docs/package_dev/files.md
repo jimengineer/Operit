@@ -36,8 +36,8 @@ await Tools.Files.read("/home/user/config.txt", "linux");
 -   `readFull(path: string): Promise<FileContentData>`: 强制读取并返回一个文本文件的全部内容。
 -   `readPart(path: string, partIndex: number): Promise<FilePartContentData>`: 分块读取大文件，返回指定索引的部分。
 -   `write(path: string, content: string): Promise<FileOperationData>`: 将文本内容写入一个文件。如果文件已存在，其内容将被覆盖。
--   `writeBinary(path: string, base64Content: string): Promise<FileOperationData>`: 将 Base64 编码的字符串解码为二进制数据并写入文件。
--   `readBinary(path: string): Promise<string>`: 读取二进制文件的内容，并将其作为 Base64 编码的字符串返回。
+-   `writeBinary(path: string, base64Content: string): Promise<FileOperationData>`: 将 Base64 编码的字符串解码为二进制数据并写入文件.
+-   `readBinary(path: string, environment?: FileEnvironment): Promise<BinaryFileContentData>`: 读取二进制文件的内容，并返回一个包含 `path`、`contentBase64`（Base64 编码内容）和 `size`（字节大小）的结构化结果。
 -   `list(path: string): Promise<DirectoryListingData>`: 列出指定目录下的所有文件和子目录。
 -   `exists(path: string): Promise<FileExistsData>`: 检查指定路径的文件或目录是否存在。
 -   `info(path: string): Promise<FileInfoData>`: 获取文件或目录的详细信息，如大小、修改日期、权限等。

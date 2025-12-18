@@ -186,6 +186,18 @@ data class FileContentData(val path: String, val content: String, val size: Long
     }
 }
 
+/** Represents a binary file content result (Base64 encoded) */
+@Serializable
+data class BinaryFileContentData(
+        val path: String,
+        val contentBase64: String,
+        val size: Long
+) : ToolResultData() {
+    override fun toString(): String {
+        return "Binary content of $path (${size} bytes, base64 length=${contentBase64.length})"
+    }
+}
+
 /** Represents file existence check result */
 @Serializable
 data class FileExistsData(
