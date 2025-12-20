@@ -1,3 +1,4 @@
+import java.io.File
 import java.io.FileInputStream
 import java.util.Properties
 
@@ -11,7 +12,6 @@ plugins {
     id("kotlin-kapt")
 }
 
-
 val localProperties = Properties()
 val localPropertiesFile = rootProject.file("local.properties")
 if (localPropertiesFile.exists()) {
@@ -23,11 +23,23 @@ android {
     compileSdk = 34
 
     signingConfigs {
-        create("release") {
-            storeFile = file("release.keystore") // 项目根目录下的自定义密钥
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+        val releaseKeystorePath = localProperties.getProperty("RELEASE_STORE_FILE")
+        val releaseStorePassword = localProperties.getProperty("RELEASE_STORE_PASSWORD")
+        val releaseKeyAlias = localProperties.getProperty("RELEASE_KEY_ALIAS")
+        val releaseKeyPassword = localProperties.getProperty("RELEASE_KEY_PASSWORD")
+
+        if (releaseKeystorePath != null &&
+            releaseStorePassword != null &&
+            releaseKeyAlias != null &&
+            releaseKeyPassword != null &&
+            File(releaseKeystorePath).exists()
+        ) {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
         }
     }
 
@@ -55,6 +67,8 @@ android {
     }
 
     buildTypes {
+        val releaseSigningConfig = signingConfigs.findByName("release")
+
         release {
             isMinifyEnabled = false
             isShrinkResources = false
@@ -62,10 +76,14 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+            if (releaseSigningConfig != null) {
+                signingConfig = releaseSigningConfig
+            }
         }
         debug {
-            signingConfig = signingConfigs.getByName("release")
+            if (releaseSigningConfig != null) {
+                signingConfig = releaseSigningConfig
+            }
         }
         create("nightly") {
             isMinifyEnabled = false
@@ -74,7 +92,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+            if (releaseSigningConfig != null) {
+                signingConfig = releaseSigningConfig
+            }
             matchingFallbacks += listOf("release")
         }
     }

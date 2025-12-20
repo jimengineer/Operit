@@ -169,7 +169,6 @@ class ModelConfigManager(private val context: Context) {
     fun getModelConfigFlow(configId: String): Flow<ModelConfigData> {
         return context.modelConfigDataStore.data.map { preferences ->
             val config = loadConfigFromDataStore(configId) ?: ModelConfigData(id = configId, name = "配置 $configId")
-            AppLogger.d("CONFIG_TIMING", "getModelConfigFlow($configId) 返回配置，apiKey: '${config.apiKey}'")
             config
         }
     }

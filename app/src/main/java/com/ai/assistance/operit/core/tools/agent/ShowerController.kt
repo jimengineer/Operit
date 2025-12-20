@@ -11,6 +11,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
+import kotlin.collections.ArrayDeque
 
 /**
  * Lightweight controller to talk to the Shower server running locally on the device.
@@ -49,11 +50,34 @@ object ShowerController {
 
     fun getVideoSize(): Pair<Int, Int>? = if (videoWidth > 0 && videoHeight > 0) Pair(videoWidth, videoHeight) else null
 
+    private val binaryLock = Any()
+    private val earlyBinaryFrames = ArrayDeque<ByteArray>()
+
     @Volatile
     private var binaryHandler: ((ByteArray) -> Unit)? = null
 
     fun setBinaryHandler(handler: ((ByteArray) -> Unit)?) {
-        binaryHandler = handler
+        val framesToReplay: List<ByteArray>
+        synchronized(binaryLock) {
+            binaryHandler = handler
+            AppLogger.d(TAG, "setBinaryHandler: handlerSet=${handler != null}, bufferedFrames=${earlyBinaryFrames.size}")
+            framesToReplay = if (handler != null && earlyBinaryFrames.isNotEmpty()) {
+                val list = earlyBinaryFrames.toList()
+                earlyBinaryFrames.clear()
+                list
+            } else {
+                emptyList()
+            }
+        }
+        if (handler != null && framesToReplay.isNotEmpty()) {
+            AppLogger.d(TAG, "setBinaryHandler: replaying ${framesToReplay.size} buffered frames")
+            framesToReplay.forEach { frame ->
+                try {
+                    handler(frame)
+                } catch (_: Exception) {
+                }
+            }
+        }
     }
 
     @Volatile
@@ -128,7 +152,22 @@ object ShowerController {
 
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
             // Binary frames contain H.264 video; forward to any registered handler.
-            binaryHandler?.invoke(bytes.toByteArray())
+            val data = bytes.toByteArray()
+            val handler: ((ByteArray) -> Unit)?
+            synchronized(binaryLock) {
+                handler = binaryHandler
+                if (handler == null) {
+                    if (earlyBinaryFrames.size >= 120) {
+                        earlyBinaryFrames.removeFirst()
+                    }
+                    earlyBinaryFrames.addLast(data)
+                    val size = earlyBinaryFrames.size
+                    if (size <= 5 || size % 30 == 0) {
+                        AppLogger.d(TAG, "WS binary: handler is null, buffering frame, bufferSize=$size")
+                    }
+                }
+            }
+            handler?.invoke(data)
         }
     }
 
@@ -238,6 +277,7 @@ object ShowerController {
 
         videoWidth = alignedWidth
         videoHeight = alignedHeight
+        AppLogger.d(TAG, "ensureDisplay: requesting CREATE_DISPLAY ${alignedWidth}x${alignedHeight} dpi=$dpi bitrateKbps=$bitrateKbps")
         val cmd = buildString {
             append("CREATE_DISPLAY ")
             append(alignedWidth)
@@ -306,7 +346,10 @@ object ShowerController {
             virtualDisplayId = null
             videoWidth = 0
             videoHeight = 0
-            binaryHandler = null
+            synchronized(binaryLock) {
+                binaryHandler = null
+                earlyBinaryFrames.clear()
+            }
         }
     }
 

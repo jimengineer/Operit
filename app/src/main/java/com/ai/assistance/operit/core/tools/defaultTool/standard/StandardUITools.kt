@@ -3,6 +3,7 @@ package com.ai.assistance.operit.core.tools.defaultTool.standard
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.content.pm.PackageManager
 import com.ai.assistance.operit.api.chat.EnhancedAIService
 import com.ai.assistance.operit.api.chat.llmprovider.ImageLinkParser
 import com.ai.assistance.operit.core.config.FunctionalPrompts
@@ -48,14 +49,18 @@ import java.util.Locale
 /** Base class for UI automation tools - standard version does not support UI operations */
 open class StandardUITools(protected val context: Context) : ToolImplementations {
 
+    init {
+        scanAndAddInstalledApps(context)
+    }
+
     companion object {
         private const val TAG = "UITools"
         private const val COMMAND_TIMEOUT_SECONDS = 10L
         private const val OPERATION_NOT_SUPPORTED =
                 "This operation is not supported in the standard version. Please use the accessibility or debugger version."
 
-        internal val APP_PACKAGES: Map<String, String> =
-                mapOf(
+        internal val APP_PACKAGES: MutableMap<String, String> =
+                mutableMapOf(
                         // Social & Messaging
                         "微信" to "com.tencent.mm",
                         "QQ" to "com.tencent.mobileqq",
@@ -245,6 +250,41 @@ open class StandardUITools(protected val context: Context) : ToolImplementations
                         "Whatsapp" to "com.whatsapp",
                         "WhatsApp" to "com.whatsapp"
                 )
+
+        fun addAppPackages(packages: Map<String, String>) {
+            APP_PACKAGES.putAll(packages)
+        }
+
+        private var appsScanned = false
+
+        fun scanAndAddInstalledApps(context: Context) {
+            if (appsScanned) return
+            synchronized(this) {
+                if (appsScanned) return
+                AppLogger.d(TAG, "Scanning for installed applications to supplement APP_PACKAGES...")
+                val pm = context.packageManager
+                try {
+                    val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+                    val newPackages = mutableMapOf<String, String>()
+                    for (app in apps) {
+                        val appName = pm.getApplicationLabel(app).toString()
+                        if (appName.isNotBlank() && app.packageName.isNotBlank()) {
+                            if (!APP_PACKAGES.containsKey(appName)) {
+                                newPackages[appName] = app.packageName
+                            }
+                        }
+                    }
+                    if (newPackages.isNotEmpty()) {
+                        addAppPackages(newPackages)
+                    }
+                    AppLogger.d(TAG, "Found and added ${newPackages.size} new application packages.")
+                } catch (e: Exception) {
+                    AppLogger.e(TAG, "Failed to scan installed applications", e)
+                } finally {
+                    appsScanned = true
+                }
+            }
+        }
     }
 
     // UI操作反馈覆盖层（使用单例避免多窗口叠加）

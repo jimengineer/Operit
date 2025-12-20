@@ -25,7 +25,8 @@ fun CursorStyleChatMessage(
         overrideStream: Stream<String>? = null,
         onDeleteMessage: ((Int) -> Unit)? = null,
         index: Int = -1,
-        enableDialogs: Boolean = true  // 新增参数：是否启用弹窗功能，默认启用
+        enableDialogs: Boolean = true,  // 新增参数：是否启用弹窗功能，默认启用
+        onEditSummary: ((ChatMessage) -> Unit)? = null
 ) {
     when (message.sender) {
         "user" -> {
@@ -54,7 +55,10 @@ fun CursorStyleChatMessage(
                             onDeleteMessage?.invoke(index)
                         }
                     },
-                    enableDialog = enableDialogs  // 传递弹窗启用状态
+                    enableDialog = enableDialogs,  // 传递弹窗启用状态
+                    onEdit = { editedMessage ->
+                        onEditSummary?.invoke(editedMessage)
+                    }
             )
         }
     }

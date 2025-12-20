@@ -37,6 +37,7 @@ class ShowerSurfaceView @JvmOverloads constructor(
         // Cancel any previous job
         attachJob?.cancel()
         attachJob = CoroutineScope(Dispatchers.Main).launch {
+            AppLogger.d(TAG, "surfaceCreated: waiting for video size from ShowerController")
             var size: Pair<Int, Int>? = null
             // Retry for a short period to wait for the video size to be set by the controller,
             // resolving a potential race condition.
@@ -50,14 +51,15 @@ class ShowerSurfaceView @JvmOverloads constructor(
                 val (w, h) = size
                 AppLogger.d(TAG, "Attaching renderer with size: ${w}x${h}")
                 ShowerVideoRenderer.attach(holder.surface, w, h)
+                // Route binary video frames to the renderer only after the surface and size are ready,
+                // so that any buffered SPS/PPS frames can be consumed correctly by the decoder.
+                AppLogger.d(TAG, "surfaceCreated: setting ShowerController binary handler")
+                ShowerController.setBinaryHandler { data ->
+                    ShowerVideoRenderer.onFrame(data)
+                }
             } else {
                 AppLogger.e(TAG, "Failed to get video size after multiple retries.")
             }
-        }
-
-        // Route binary video frames to the renderer
-        ShowerController.setBinaryHandler { data ->
-            ShowerVideoRenderer.onFrame(data)
         }
     }
 
@@ -69,6 +71,7 @@ class ShowerSurfaceView @JvmOverloads constructor(
         AppLogger.d(TAG, "surfaceDestroyed")
         attachJob?.cancel()
         attachJob = null
+        AppLogger.d(TAG, "surfaceDestroyed: clearing binary handler and detaching renderer")
         ShowerController.setBinaryHandler(null)
         ShowerVideoRenderer.detach()
     }

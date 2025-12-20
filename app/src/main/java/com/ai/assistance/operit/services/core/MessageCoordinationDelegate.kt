@@ -41,10 +41,14 @@ class MessageCoordinationDelegate(
         private const val TAG = "MessageCoordinationDelegate"
     }
 
-    // 总结状态
+    // 总结状态（使用 summarizeHistory 时）
     private val _isSummarizing = MutableStateFlow(false)
     val isSummarizing: StateFlow<Boolean> = _isSummarizing.asStateFlow()
-    
+
+    // 发送消息触发的异步总结状态（使用 launchAsyncSummaryForSend 时）
+    private val _isSendTriggeredSummarizing = MutableStateFlow(false)
+    val isSendTriggeredSummarizing: StateFlow<Boolean> = _isSendTriggeredSummarizing.asStateFlow()
+
     // 保存总结任务的 Job 引用，用于取消
     private var summaryJob: Job? = null
     
@@ -116,6 +120,9 @@ class MessageCoordinationDelegate(
         // 获取当前附件列表
         val currentAttachments = attachmentDelegate.attachments.value
 
+        // 当前请求使用的Token使用率阈值，默认使用配置值
+        var tokenUsageThresholdForSend = apiConfigDelegate.summaryTokenThreshold.value.toDouble()
+
         // 如果不是续写，检查是否需要总结
         if (!isContinuation && !skipSummaryCheck) {
             val currentMessages = chatHistoryDelegate.chatHistory.value
@@ -126,50 +133,23 @@ class MessageCoordinationDelegate(
                 messages = currentMessages,
                 currentTokens = currentTokens,
                 maxTokens = maxTokens,
-                tokenUsageThreshold = apiConfigDelegate.summaryTokenThreshold.value.toDouble(),
+                tokenUsageThreshold = tokenUsageThresholdForSend,
                 enableSummary = apiConfigDelegate.enableSummary.value,
                 enableSummaryByMessageCount = apiConfigDelegate.enableSummaryByMessageCount.value,
                 summaryMessageCountThreshold = apiConfigDelegate.summaryMessageCountThreshold.value
             )
 
             if (isShouldGenerateSummary) {
-                // 主动触发总结，总结后会自动继续
-                // 保存当前输入，清空输入框，并立即更新UI状态为总结中
-                val userInput = messageProcessingDelegate.userMessage.value.text
-                messageProcessingDelegate.updateUserMessage("") // 清空输入框
-                // 先设置activeStreamingChatId，确保UI能显示总结状态
-                messageProcessingDelegate.setActiveStreamingChatId(chatId)
-                messageProcessingDelegate.handleInputProcessingState(InputProcessingState.Summarizing("正在压缩历史记录..."))
+                val snapshotMessages = currentMessages.toList()
+                val insertPosition = chatHistoryDelegate.findProperSummaryPosition(snapshotMessages)
 
-                summaryJob = coroutineScope.launch {
-                    var summarySuccess = false
-                    try {
-                        summarySuccess = summarizeHistory(autoContinue = false, promptFunctionType = promptFunctionType)
-                        if (summarySuccess) {
-                            // 总结成功后，恢复用户输入并继续发送
-                            messageProcessingDelegate.updateUserMessage(userInput)
-                            sendMessageInternal(
-                                promptFunctionType = promptFunctionType,
-                                isContinuation = false, // 仍然是用户发起
-                                skipSummaryCheck = true // 跳过再次检查
-                            )
-                        } else {
-                            // 总结失败，恢复用户输入并提示
-                            messageProcessingDelegate.updateUserMessage(userInput)
-                            uiStateDelegate.showErrorMessage("历史记录总结失败，消息未发送")
-                        }
-                    } catch (e: CancellationException) {
-                        // 总结被取消，恢复用户输入但不显示错误消息
-                        messageProcessingDelegate.updateUserMessage(userInput)
-                        throw e // 重新抛出，让协程正确取消
-                    } finally {
-                        summaryJob = null
-                    }
-                }
-                return // 阻止当前的消息发送流程
+                // 异步生成总结，不阻塞当前消息发送
+                launchAsyncSummaryForSend(snapshotMessages, insertPosition, chatId)
+
+                // 本次请求的Token阈值在原基础上增加 0.5
+                tokenUsageThresholdForSend += 0.5
             }
         }
-
 
         // 检测是否附着了记忆文件夹
         val hasMemoryFolder = currentAttachments.any {
@@ -190,7 +170,7 @@ class MessageCoordinationDelegate(
             enableMemoryQuery = shouldEnableMemoryQuery,
             enableWorkspaceAttachment = !workspacePath.isNullOrBlank(),
             maxTokens = (apiConfigDelegate.contextLength.value * 1024).toInt(),
-            tokenUsageThreshold = apiConfigDelegate.summaryTokenThreshold.value.toDouble(),
+            tokenUsageThreshold = tokenUsageThresholdForSend,
             replyToMessage = getReplyToMessage(),
             isAutoContinuation = isAutoContinuation,
             enableSummary = apiConfigDelegate.enableSummary.value
@@ -291,6 +271,71 @@ class MessageCoordinationDelegate(
         }
     }
 
+    private fun launchAsyncSummaryForSend(
+        snapshotMessages: List<ChatMessage>,
+        insertPosition: Int,
+        originalChatId: String?
+    ) {
+        if (snapshotMessages.isEmpty() || originalChatId == null) {
+            return
+        }
+
+        // 标记：有一次发送触发的异步总结正在进行
+        _isSendTriggeredSummarizing.value = true
+
+        coroutineScope.launch {
+            try {
+                val service = getEnhancedAiService() ?: return@launch
+
+                val summaryMessage = AIMessageManager.summarizeMemory(
+                    enhancedAiService = service,
+                    messages = snapshotMessages,
+                    autoContinue = false
+                ) ?: return@launch
+
+                val currentChatId = chatHistoryDelegate.currentChatId.value
+                if (currentChatId != originalChatId) {
+                    AppLogger.d(TAG, "Async summary skipped: chat switched from $originalChatId to $currentChatId")
+                    return@launch
+                }
+
+                val currentMessages = chatHistoryDelegate.chatHistory.value
+                if (insertPosition < 0 || insertPosition > currentMessages.size) {
+                    AppLogger.w(
+                        TAG,
+                        "Async summary insert skipped: position out of bounds: $insertPosition, size=${currentMessages.size}"
+                    )
+                    return@launch
+                }
+
+                chatHistoryDelegate.addSummaryMessage(summaryMessage, insertPosition)
+
+                val newHistoryForTokens =
+                    AIMessageManager.getMemoryFromMessages(chatHistoryDelegate.chatHistory.value)
+                val chatService = service.getAIServiceForFunction(FunctionType.CHAT)
+                val newWindowSize = chatService.calculateInputTokens("", newHistoryForTokens)
+                val (inputTokens, outputTokens) = tokenStatsDelegate.getCumulativeTokenCounts()
+                chatHistoryDelegate.saveCurrentChat(inputTokens, outputTokens, newWindowSize)
+                withContext(Dispatchers.Main) {
+                    tokenStatsDelegate.setTokenCounts(inputTokens, outputTokens, newWindowSize)
+                }
+                AppLogger.d(TAG, "Async summary completed, updated window size: $newWindowSize")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLogger.e(TAG, "Async summary during send failed: ${e.message}", e)
+            } finally {
+                _isSendTriggeredSummarizing.value = false
+
+                // 如果当前处于 Summarizing 状态（例如主界面在回复完成后锁定了总结状态），
+                // 当异步总结结束时，主动恢复到 Idle
+                if (messageProcessingDelegate.inputProcessingState.value is InputProcessingState.Summarizing) {
+                    messageProcessingDelegate.handleInputProcessingState(InputProcessingState.Idle)
+                }
+            }
+        }
+    }
+
     /**
      * 执行历史总结并自动继续对话的核心逻辑
      */
@@ -368,9 +413,12 @@ class MessageCoordinationDelegate(
                         isContinuation = true,
                         isAutoContinuation = true
                     )
+                } else if (wasSummarizing) {
+                    // 总结成功且不自动续写时，主动恢复到Idle
+                    messageProcessingDelegate.handleInputProcessingState(InputProcessingState.Idle)
                 }
             } else if (wasSummarizing) {
-                // 总结未成功时才恢复到Idle，避免覆盖后续续写状态
+                // 总结未成功时也恢复到Idle，避免卡在Summarizing状态
                 messageProcessingDelegate.handleInputProcessingState(InputProcessingState.Idle)
             }
         }

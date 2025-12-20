@@ -63,6 +63,10 @@ private fun AutoGlmOneClickScreen(
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
+    var isAdvancedExpanded by remember { mutableStateOf(false) }
+    var advancedEndpoint by remember { mutableStateOf("") }
+    var advancedModelName by remember { mutableStateOf("") }
+
     val scrollState = rememberScrollState()
 
     fun startConfigure() {
@@ -85,15 +89,35 @@ private fun AutoGlmOneClickScreen(
                 val summaries = modelConfigManager.getAllConfigSummaries()
                 val existing = summaries.find { it.name == configName }
 
-                val endpoint = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+                val useAdvanced = isAdvancedExpanded &&
+                    advancedEndpoint.trim().isNotEmpty() &&
+                    advancedModelName.trim().isNotEmpty()
+
+                val endpoint = if (useAdvanced) {
+                    advancedEndpoint.trim()
+                } else {
+                    "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+                }
+
+                val modelName = if (useAdvanced) {
+                    advancedModelName.trim()
+                } else {
+                    "autoglm-phone"
+                }
+
+                val providerType = if (useAdvanced) {
+                    ApiProviderType.OPENAI_GENERIC
+                } else {
+                    ApiProviderType.ZHIPU
+                }
 
                 val configId = if (existing != null) {
                     modelConfigManager.updateModelConfig(
                         configId = existing.id,
                         apiKey = apiKey,
                         apiEndpoint = endpoint,
-                        modelName = "autoglm-phone",
-                        apiProviderType = ApiProviderType.ZHIPU
+                        modelName = modelName,
+                        apiProviderType = providerType
                     ).id
                 } else {
                     val newId = modelConfigManager.createConfig(configName)
@@ -101,8 +125,8 @@ private fun AutoGlmOneClickScreen(
                         configId = newId,
                         apiKey = apiKey,
                         apiEndpoint = endpoint,
-                        modelName = "autoglm-phone",
-                        apiProviderType = ApiProviderType.ZHIPU
+                        modelName = modelName,
+                        apiProviderType = providerType
                     ).id
                 }
 
@@ -311,6 +335,42 @@ private fun AutoGlmOneClickScreen(
                     },
                     singleLine = true
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(
+                    onClick = { isAdvancedExpanded = !isAdvancedExpanded }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = null
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (isAdvancedExpanded) {
+                            "隐藏高级设置"
+                        } else {
+                            "显示高级设置（自定义 Endpoint / 模型名称）"
+                        }
+                    )
+                }
+
+                if (isAdvancedExpanded) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = advancedEndpoint,
+                        onValueChange = { advancedEndpoint = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("自定义 Endpoint（OpenAI 兼容）") },
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = advancedModelName,
+                        onValueChange = { advancedModelName = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("模型名称") },
+                        singleLine = true
+                    )
+                }
                 Spacer(modifier = Modifier.height(12.dp))
                 Button(
                     onClick = { startConfigure() },

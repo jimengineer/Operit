@@ -33,7 +33,8 @@ fun SummaryMessageComposable(
     backgroundColor: Color,
     textColor: Color,
     onDelete: () -> Unit,
-    enableDialog: Boolean = true  // 新增参数：是否启用弹窗功能，默认启用
+    enableDialog: Boolean = true,  // 新增参数：是否启用弹窗功能，默认启用
+    onEdit: ((ChatMessage) -> Unit)? = null
 ) {
     val context = LocalContext.current
     // 记住展开状态
@@ -148,6 +149,14 @@ fun SummaryMessageComposable(
                         modifier = Modifier.align(Alignment.End),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        TextButton(
+                            onClick = {
+                                onEdit?.invoke(message)
+                                showSummaryDialog = false
+                            }
+                        ) {
+                            Text(context.getString(R.string.edit))
+                        }
                         TextButton(
                             onClick = {
                                 showSummaryDialog = false

@@ -184,6 +184,7 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
             this.displayId = displayId
             isFullscreen = false
             isSnapped = false
+            AppLogger.d("VirtualDisplayOverlay", "show: displayId=$displayId")
             ensureOverlay()
             overlayView?.visibility = View.VISIBLE
             updateLayoutParams()
@@ -520,6 +521,10 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
                         while (true) {
                             val ready = ShowerController.getVideoSize() != null
                             if (hasShowerDisplay != ready) {
+                                AppLogger.d(
+                                    "VirtualDisplayOverlay",
+                                    "OverlayCard: hasShowerDisplay changed from $hasShowerDisplay to $ready, videoSize=${ShowerController.getVideoSize()}"
+                                )
                                 hasShowerDisplay = ready
                             }
                             delay(500)
@@ -743,6 +748,10 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
                             }
                         }
                     } else {
+                        AppLogger.d(
+                            "VirtualDisplayOverlay",
+                            "OverlayCard: Shower 虚拟屏尚未就绪, id=$id, hasShowerDisplay=$hasShowerDisplay, videoSize=${ShowerController.getVideoSize()}"
+                        )
                         Text(
                             text = "Shower 虚拟屏尚未就绪",
                             style = MaterialTheme.typography.bodyMedium,

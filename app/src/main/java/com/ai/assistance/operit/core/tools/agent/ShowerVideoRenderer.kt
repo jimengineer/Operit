@@ -49,11 +49,15 @@ object ShowerVideoRenderer {
     @Volatile
     private var height: Int = 0
 
+    @Volatile
+    private var warnedNoSurface: Boolean = false
+
     fun attach(surface: Surface, videoWidth: Int, videoHeight: Int) {
         synchronized(lock) {
             this.surface = surface
             this.width = videoWidth
             this.height = videoHeight
+            warnedNoSurface = false
             // Decoder will be (re)initialized lazily when the first csd buffers arrive.
             // 注意：不要在这里清空 csd0/csd1，否则当 Surface 重新创建但服务器
             // 不再发送 SPS/PPS 时，解码器将永远无法重新初始化，导致黑屏。
@@ -69,6 +73,7 @@ object ShowerVideoRenderer {
             surface = null
             // 不要清空 csd0/csd1，让后续重新 attach 时仍可用之前的 SPS/PPS，避免黑屏
             pendingFrames.clear()
+            warnedNoSurface = false
         }
     }
 
@@ -91,6 +96,10 @@ object ShowerVideoRenderer {
     fun onFrame(data: ByteArray) {
         synchronized(lock) {
             if (surface == null || width <= 0 || height <= 0) {
+                if (!warnedNoSurface) {
+                    AppLogger.w(TAG, "onFrame: no surface or invalid size (surface=$surface, width=$width, height=$height); dropping frames until attached")
+                    warnedNoSurface = true
+                }
                 return
             }
 

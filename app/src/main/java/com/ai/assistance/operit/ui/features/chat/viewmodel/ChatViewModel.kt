@@ -485,7 +485,10 @@ class ChatViewModel(private val context: Context) : ViewModel() {
             try {
                 service.inputProcessingState.collect { state ->
                     if (state is InputProcessingState.Completed && 
-                        ::messageCoordinationDelegate.isInitialized && messageCoordinationDelegate.isSummarizing.value) {
+                        ::messageCoordinationDelegate.isInitialized &&
+                        (messageCoordinationDelegate.isSummarizing.value ||
+                         messageCoordinationDelegate.isSendTriggeredSummarizing.value)
+                    ) {
                         messageProcessingDelegate.handleInputProcessingState(
                             InputProcessingState.Summarizing("正在总结记忆...")
                         )

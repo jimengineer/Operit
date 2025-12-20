@@ -571,6 +571,7 @@ class ActionHandler(
             AppLogger.e("ActionHandler", "Error getting Shower display id", e)
             null
         }
+        AppLogger.d("ActionHandler", "resolveShowerUsageContext: isAdbOrHigher=$isAdbOrHigher, showerDisplayId=$showerId")
         return ShowerUsageContext(isAdbOrHigher = isAdbOrHigher, showerDisplayId = showerId)
     }
 

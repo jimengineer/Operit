@@ -340,7 +340,10 @@ private fun MessageItem(
                     supportToolMarkup = true,
                     initialThinkingExpanded = true,
                     onDeleteMessage = onDeleteMessage,
-                    index = index
+                    index = index,
+                    onEditSummary = { summaryMessage ->
+                        onSelectMessageToEdit?.invoke(index, summaryMessage, "summary")
+                    }
                 )
             }
 
