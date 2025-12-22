@@ -9,9 +9,10 @@ import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodec.BufferInfo;
 import android.media.MediaFormat;
+import android.os.Binder;
 import android.os.Build;
+import android.os.IBinder;
 import android.os.Looper;
-import android.util.Log;
 import android.view.Surface;
 
 import com.ai.assistance.shower.shell.FakeContext;
@@ -19,9 +20,6 @@ import com.ai.assistance.shower.shell.Workarounds;
 import com.ai.assistance.shower.wrappers.ServiceManager;
 import com.ai.assistance.shower.wrappers.WindowManager;
 
-import org.java_websocket.WebSocket;
-import org.java_websocket.handshake.ClientHandshake;
-import org.java_websocket.server.WebSocketServer;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -37,6 +35,9 @@ import java.net.Socket;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 
 /**
  * Local WebSocket server which can create a virtual display via reflection and
@@ -47,6 +48,9 @@ public class Main {
     private static final String TAG = "ShowerMain";
     private static final int DEFAULT_PORT = 8986;
     private static final int DEFAULT_BIT_RATE = 4_000_000;
+
+    private static final String ACTION_SHOWER_BINDER_READY = "com.ai.assistance.operit.action.SHOWER_BINDER_READY";
+    private static final String EXTRA_BINDER_CONTAINER = "binder_container";
 
     private static final int VIRTUAL_DISPLAY_FLAG_PUBLIC = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC;
     private static final int VIRTUAL_DISPLAY_FLAG_PRESENTATION = DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION;
@@ -66,7 +70,6 @@ public class Main {
 
     private final Context appContext;
 
-    private ScreenWebSocketServer server;
     private VirtualDisplay virtualDisplay;
     private int virtualDisplayId = -1;
     private MediaCodec videoEncoder;
@@ -74,41 +77,113 @@ public class Main {
     private Thread encoderThread;
     private volatile boolean encoderRunning;
     private InputController inputController;
+    private IShowerVideoSink videoSink;
+
+    private static final long CLIENT_IDLE_TIMEOUT_MS = 15_000L;
+    private volatile long lastClientActiveTime = System.currentTimeMillis();
+    private Thread idleWatcherThread;
+    private final Object clientLock = new Object();
+    private IBinder videoSinkBinder;
+    private IBinder.DeathRecipient videoSinkDeathRecipient;
 
     private static PrintWriter fileLog;
+    private static final SimpleDateFormat LOG_TIME_FORMAT =
+            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US);
+    // 当通过 main(String...) 以 CLI 方式启动时为 true，用于在服务停止后退出整个进程
+    private static volatile boolean sExitOnStop = false;
 
     static synchronized void logToFile(String msg, Throwable t) {
         try {
             if (fileLog == null) {
-                fileLog = new PrintWriter(new FileWriter("/data/local/tmp/shower.log", true), true);
+                File logFile = new File("/data/local/tmp/shower.log");
+                fileLog = new PrintWriter(new FileWriter(logFile, true), true);
             }
             long now = System.currentTimeMillis();
-            String line = now + " " + msg;
+            String timestamp = LOG_TIME_FORMAT.format(new Date(now));
+            String line = timestamp + " " + msg;
             fileLog.println(line);
             if (t != null) {
                 t.printStackTrace(fileLog);
             }
-            broadcastLog(line);
         } catch (IOException e) {
-            Log.e(TAG, "logToFile failed", e);
+            // For debugging: also print to stderr so we can see why the log file is not created.
+            e.printStackTrace();
         }
     }
 
-    private static void broadcastLog(String msg) {
-        Main instance = sInstance;
-        if (instance == null) {
-            return;
+    private byte[] captureScreenshotBytes() {
+        if (virtualDisplay == null || virtualDisplay.getDisplay() == null || virtualDisplayId == -1) {
+            logToFile("captureScreenshotBytes requested but no virtual display", null);
+            return null;
         }
-        ScreenWebSocketServer s = instance.server;
-        if (s == null) {
-            return;
-        }
+
+        String path = "/data/local/tmp/shower_screenshot.png";
+        String cmd = "screencap -d " + virtualDisplayId + " -p " + path;
+        Process proc = null;
         try {
-            s.broadcast(msg);
+            logToFile("captureScreenshotBytes executing: " + cmd, null);
+            proc = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
+            int exit = proc.waitFor();
+            if (exit != 0) {
+                logToFile("captureScreenshotBytes screencap exited with code=" + exit, null);
+                return null;
+            }
+
+            File f = new File(path);
+            if (!f.exists() || f.length() == 0) {
+                logToFile("captureScreenshotBytes file missing or empty: " + path, null);
+                return null;
+            }
+
+            byte[] data;
+            try (FileInputStream fis = new FileInputStream(f)) {
+                data = new byte[(int) f.length()];
+                int read = fis.read(data);
+                if (read != data.length) {
+                    logToFile("captureScreenshotBytes short read: " + read + " / " + data.length, null);
+                }
+            }
+            return data;
         } catch (Exception e) {
-            Log.e(TAG, "broadcastLog failed", e);
+            logToFile("captureScreenshotBytes failed: " + e.getMessage(), e);
+            return null;
+        } finally {
+            if (proc != null) {
+                try {
+                    proc.destroy();
+                } catch (Exception ignored) {
+                }
+            }
         }
     }
+
+
+    private void markClientActive() {
+        lastClientActiveTime = System.currentTimeMillis();
+    }
+
+    private void startIdleWatcher() {
+        idleWatcherThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (true) {
+                    try {
+                        Thread.sleep(1000L);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                    long now = System.currentTimeMillis();
+                    if (videoSink == null && now - lastClientActiveTime > CLIENT_IDLE_TIMEOUT_MS) {
+                        logToFile("No active Binder clients for " + CLIENT_IDLE_TIMEOUT_MS + "ms, exiting", null);
+                        System.exit(0);
+                    }
+                }
+            }
+        }, "ShowerIdleWatcher");
+        idleWatcherThread.setDaemon(true);
+        idleWatcherThread.start();
+    }
+
 
     private static void prepareMainLooper() {
         Looper.prepare();
@@ -124,11 +199,11 @@ public class Main {
     }
 
     public static void main(String... args) {
+        sExitOnStop = true;
         try {
             prepareMainLooper();
             logToFile("prepareMainLooper ok", null);
         } catch (Throwable t) {
-            Log.e(TAG, "prepareMainLooper failed", t);
             logToFile("prepareMainLooper failed: " + t.getMessage(), t);
         }
 
@@ -136,49 +211,17 @@ public class Main {
             Workarounds.apply();
             logToFile("Workarounds.apply ok", null);
         } catch (Throwable t) {
-            Log.e(TAG, "Workarounds.apply failed", t);
             logToFile("Workarounds.apply failed: " + t.getMessage(), t);
         }
 
         Context context = FakeContext.get();
-        Main main = new Main(context);
-        main.startServer();
-        logToFile("server started", null);
-
-        // Simple self-test: connect to the local WebSocket server and perform a basic WebSocket HTTP handshake.
-        new Thread(() -> {
-            try {
-                logToFile("WS self-test starting", null);
-                Socket socket = new Socket("127.0.0.1", DEFAULT_PORT);
-                PrintWriter out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.US_ASCII), true);
-                BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
-
-                String key = "dGVzdGtleQ=="; // any base64-like string
-                String request = "GET / HTTP/1.1\r\n" +
-                        "Host: 127.0.0.1:" + DEFAULT_PORT + "\r\n" +
-                        "Upgrade: websocket\r\n" +
-                        "Connection: Upgrade\r\n" +
-                        "Sec-WebSocket-Key: " + key + "\r\n" +
-                        "Sec-WebSocket-Version: 13\r\n" +
-                        "\r\n";
-                out.print(request);
-                out.flush();
-
-                String statusLine = in.readLine();
-                Log.i(TAG, "WS self-test HTTP status: " + statusLine);
-                logToFile("WS self-test HTTP status: " + statusLine, null);
-
-                socket.close();
-            } catch (Exception e) {
-                Log.e(TAG, "WS self-test failed", e);
-                logToFile("WS self-test failed: " + e.getMessage(), e);
-            }
-        }, "ShowerWsSelfTest").start();
+        sInstance = new Main(context);
+        logToFile("server started (Binder only mode)", null);
 
         try {
             Thread.sleep(Long.MAX_VALUE);
         } catch (InterruptedException e) {
-            Log.e(TAG, "Main thread interrupted", e);
+            logToFile("Main thread interrupted: " + e.getMessage(), e);
         }
     }
 
@@ -189,50 +232,187 @@ public class Main {
             this.inputController = new InputController();
             logToFile("InputController initialized", null);
         } catch (Throwable t) {
-            Log.e(TAG, "Failed to init InputController", t);
             logToFile("Failed to init InputController: " + t.getMessage(), t);
             this.inputController = null;
         }
+
+        try {
+            IShowerService service = new IShowerService.Stub() {
+                @Override
+                public void ensureDisplay(int width, int height, int dpi, int bitrateKbps) {
+                    markClientActive();
+                    int bitRate = bitrateKbps > 0 ? bitrateKbps * 1000 : DEFAULT_BIT_RATE;
+                    ensureVirtualDisplay(width, height, dpi, bitRate);
+                }
+
+                @Override
+                public void destroyDisplay() {
+                    markClientActive();
+                    releaseDisplay();
+                }
+
+                @Override
+                public void launchApp(String packageName) {
+                    markClientActive();
+                    if (packageName != null && !packageName.isEmpty()) {
+                        launchPackageOnVirtualDisplay(packageName);
+                    }
+                }
+
+                @Override
+                public void tap(float x, float y) {
+                    markClientActive();
+                    if (inputController != null) {
+                        inputController.injectTap(x, y);
+                        logToFile("Binder TAP injected: " + x + "," + y, null);
+                    }
+                }
+
+                @Override
+                public void swipe(float x1, float y1, float x2, float y2, long durationMs) {
+                    markClientActive();
+                    if (inputController != null) {
+                        inputController.injectSwipe(x1, y1, x2, y2, durationMs);
+                        logToFile("Binder SWIPE injected: " + x1 + "," + y1 + " -> " + x2 + "," + y2 + " d=" + durationMs, null);
+                    }
+                }
+
+                @Override
+                public void touchDown(float x, float y) {
+                    markClientActive();
+                    if (inputController != null) {
+                        inputController.touchDown(x, y);
+                    }
+                }
+
+                @Override
+                public void touchMove(float x, float y) {
+                    markClientActive();
+                    if (inputController != null) {
+                        inputController.touchMove(x, y);
+                    }
+                }
+
+                @Override
+                public void touchUp(float x, float y) {
+                    markClientActive();
+                    if (inputController != null) {
+                        inputController.touchUp(x, y);
+                    }
+                }
+
+                @Override
+                public void injectKey(int keyCode) {
+                    markClientActive();
+                    if (inputController != null) {
+                        inputController.injectKey(keyCode);
+                        logToFile("Binder KEY injected: " + keyCode, null);
+                    }
+                }
+
+                @Override
+                public byte[] requestScreenshot() {
+                    markClientActive();
+                    return captureScreenshotBytes();
+                }
+
+                @Override
+                public int getDisplayId() {
+                    markClientActive();
+                    return virtualDisplayId;
+                }
+
+                @Override
+                public void setVideoSink(IBinder sink) {
+                    markClientActive();
+                    synchronized (clientLock) {
+                        if (videoSinkBinder != null && videoSinkBinder != sink && videoSinkDeathRecipient != null) {
+                            try {
+                                videoSinkBinder.unlinkToDeath(videoSinkDeathRecipient, 0);
+                            } catch (Throwable t) {
+                                logToFile("unlinkToDeath previous video sink failed: " + t.getMessage(), t);
+                            }
+                            videoSinkBinder = null;
+                            videoSinkDeathRecipient = null;
+                        }
+                        if (sink == null) {
+                            videoSink = null;
+                            videoSinkBinder = null;
+                            videoSinkDeathRecipient = null;
+                            return;
+                        }
+                        videoSinkBinder = sink;
+                        videoSinkDeathRecipient = new IBinder.DeathRecipient() {
+                            @Override
+                            public void binderDied() {
+                                synchronized (clientLock) {
+                                    logToFile("Video sink binder died, clearing sink", null);
+                                    videoSink = null;
+                                    videoSinkBinder = null;
+                                    videoSinkDeathRecipient = null;
+                                }
+                            }
+                        };
+                        try {
+                            sink.linkToDeath(videoSinkDeathRecipient, 0);
+                        } catch (Throwable t) {
+                            logToFile("linkToDeath for video sink failed: " + t.getMessage(), t);
+                        }
+                        videoSink = IShowerVideoSink.Stub.asInterface(sink);
+                    }
+                }
+            };
+            try {
+                Class<?> smClass = Class.forName("android.os.ServiceManager");
+                java.lang.reflect.Method addService;
+                try {
+                    // Older Android: addService(String, IBinder, boolean)
+                    addService = smClass.getDeclaredMethod("addService", String.class, IBinder.class, boolean.class);
+                    addService.setAccessible(true);
+                    addService.invoke(null, "ai.assistance.shower", (IBinder) service, Boolean.TRUE);
+                    logToFile("Registered Binder service ai.assistance.shower via 3-arg addService", null);
+                } catch (NoSuchMethodException e) {
+                    // Newer Android: addService(String, IBinder, boolean, int)
+                    addService = smClass.getDeclaredMethod("addService", String.class, IBinder.class, boolean.class, int.class);
+                    addService.setAccessible(true);
+                    // Use 0 as dump priority, same as scrcpy/shizuku style implementations.
+                    addService.invoke(null, "ai.assistance.shower", (IBinder) service, Boolean.TRUE, 0);
+                    logToFile("Registered Binder service ai.assistance.shower via 4-arg addService", null);
+                }
+            } catch (SecurityException se) {
+                logToFile("ServiceManager.addService denied by SELinux, continuing with broadcast-only registration", se);
+            } catch (Throwable t) {
+                logToFile("ServiceManager.addService failed (non-fatal): " + t.getMessage(), t);
+            }
+
+            sendBinderToApp(service);
+        } catch (Throwable t) {
+            logToFile("Failed to initialize Shower Binder service: " + t.getMessage(), t);
+        }
+
+        startIdleWatcher();
     }
 
-    /**
-     * Convenience entry: create a Main instance and start the WebSocket server.
-     */
     public static Main start(Context context) {
         Main main = new Main(context);
-        main.startServer();
+        logToFile("server started (Binder only mode via Activity)", null);
         return main;
     }
 
-    /**
-     * Start a WebSocket server bound to 127.0.0.1:DEFAULT_PORT.
-     */
-    public synchronized void startServer() {
-        if (server != null) {
-            return;
+
+    private void sendBinderToApp(IShowerService service) {
+        try {
+            Context context = FakeContext.get();
+            Intent intent = new Intent(ACTION_SHOWER_BINDER_READY);
+            intent.setPackage("com.ai.assistance.operit");
+            intent.putExtra(EXTRA_BINDER_CONTAINER, new ShowerBinderContainer(service.asBinder()));
+            context.sendBroadcast(intent);
+            logToFile("Sent SHOWER_BINDER_READY broadcast to com.ai.assistance.operit via Context.sendBroadcast", null);
+        } catch (Throwable t) {
+            logToFile("Failed to send SHOWER_BINDER_READY broadcast: " + t.getMessage(), t);
         }
-        InetSocketAddress address = new InetSocketAddress("127.0.0.1", DEFAULT_PORT);
-        server = new ScreenWebSocketServer(address);
-        // Set connection loss timeout to 15 seconds.
-        server.setConnectionLostTimeout(15);
-        server.start();
-        Log.i(TAG, "WebSocket server starting on " + address);
-        logToFile("WebSocket server starting on " + address, null);
     }
 
-    public synchronized void stopServer() {
-        logToFile("stopServer called", null);
-        if (server != null) {
-            try {
-                server.stop();
-            } catch (Exception e) {
-                Log.e(TAG, "Error stopping WebSocket server", e);
-                logToFile("Error stopping WebSocket server: " + e.getMessage(), e);
-            }
-            server = null;
-        }
-        releaseDisplay();
-    }
 
     private synchronized void ensureVirtualDisplay(int width, int height, int dpi, int bitRate) {
         logToFile("ensureVirtualDisplay requested: " + width + "x" + height + " dpi=" + dpi + " bitRate=" + bitRate, null);
@@ -331,10 +511,8 @@ public class Main {
             encoderThread = new Thread(this::encodeLoop, "ShowerVideoEncoder");
             encoderThread.start();
 
-            Log.i(TAG, "Created virtual display and started encoder: " + virtualDisplay);
             logToFile("Created virtual display and started encoder: " + virtualDisplay, null);
         } catch (Exception e) {
-            Log.e(TAG, "Failed to create virtual display or encoder", e);
             logToFile("Failed to create virtual display or encoder: " + e.getMessage(), e);
             stopEncoder();
         }
@@ -347,66 +525,6 @@ public class Main {
      * and sends it back to the requesting client as a Base64-encoded text frame:
      *   SCREENSHOT_DATA <base64_png>
      */
-    private void handleScreenshotRequest(WebSocket conn) {
-        if (virtualDisplay == null || virtualDisplay.getDisplay() == null || virtualDisplayId == -1) {
-            logToFile("SCREENSHOT requested but no virtual display", null);
-            try {
-                conn.send("SCREENSHOT_ERROR no_virtual_display");
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to send SCREENSHOT_ERROR", e);
-            }
-            return;
-        }
-
-        String path = "/data/local/tmp/shower_screenshot.png";
-        String cmd = "screencap -d " + virtualDisplayId + " -p " + path;
-        Process proc = null;
-        try {
-            logToFile("SCREENSHOT executing: " + cmd, null);
-            proc = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
-            int exit = proc.waitFor();
-            if (exit != 0) {
-                logToFile("SCREENSHOT screencap exited with code=" + exit, null);
-                conn.send("SCREENSHOT_ERROR screencap_failed:" + exit);
-                return;
-            }
-
-            File f = new File(path);
-            if (!f.exists() || f.length() == 0) {
-                logToFile("SCREENSHOT file missing or empty: " + path, null);
-                conn.send("SCREENSHOT_ERROR file_missing");
-                return;
-            }
-
-            byte[] data;
-            try (FileInputStream fis = new FileInputStream(f)) {
-                data = new byte[(int) f.length()];
-                int read = fis.read(data);
-                if (read != data.length) {
-                    logToFile("SCREENSHOT short read: " + read + " / " + data.length, null);
-                }
-            }
-
-            // Encode as Base64 without line breaks.
-            String b64 = android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP);
-            logToFile("SCREENSHOT captured, bytes=" + data.length + ", b64_len=" + b64.length(), null);
-            conn.send("SCREENSHOT_DATA " + b64);
-        } catch (Exception e) {
-            Log.e(TAG, "handleScreenshotRequest failed", e);
-            logToFile("SCREENSHOT failed: " + e.getMessage(), e);
-            try {
-                conn.send("SCREENSHOT_ERROR " + e.getClass().getSimpleName() + ":" + e.getMessage());
-            } catch (Exception ignored) {
-            }
-        } finally {
-            if (proc != null) {
-                try {
-                    proc.destroy();
-                } catch (Exception ignored) {
-                }
-            }
-        }
-    }
 
     private void encodeLoop() {
         MediaCodec codec = videoEncoder;
@@ -421,7 +539,6 @@ public class Main {
             try {
                 index = codec.dequeueOutputBuffer(bufferInfo, 10_000);
             } catch (IllegalStateException e) {
-                Log.e(TAG, "dequeueOutputBuffer failed", e);
                 logToFile("dequeueOutputBuffer failed: " + e.getMessage(), e);
                 break;
             }
@@ -432,14 +549,14 @@ public class Main {
                 MediaFormat format = codec.getOutputFormat();
                 trySendConfig(format);
             } else if (index >= 0) {
-                if (bufferInfo.size > 0 && server != null) {
+                if (bufferInfo.size > 0) {
                     ByteBuffer outputBuffer = codec.getOutputBuffer(index);
                     if (outputBuffer != null) {
                         outputBuffer.position(bufferInfo.offset);
                         outputBuffer.limit(bufferInfo.offset + bufferInfo.size);
                         byte[] data = new byte[bufferInfo.size];
                         outputBuffer.get(data);
-                        server.broadcast(data);
+                        sendVideoFrame(data);
                     }
                 }
                 codec.releaseOutputBuffer(index, false);
@@ -452,24 +569,33 @@ public class Main {
     }
 
     private void trySendConfig(MediaFormat format) {
-        if (server == null) {
-            return;
-        }
         ByteBuffer csd0 = format.getByteBuffer("csd-0");
         ByteBuffer csd1 = format.getByteBuffer("csd-1");
-        sendConfigBuffer(csd0);
-        sendConfigBuffer(csd1);
+        sendVideoFrame(csd0);
+        sendVideoFrame(csd1);
     }
 
-    private void sendConfigBuffer(ByteBuffer buffer) {
-        if (buffer == null || !buffer.hasRemaining() || server == null) {
+    private void sendVideoFrame(ByteBuffer buffer) {
+        if (buffer == null || !buffer.hasRemaining()) {
             return;
         }
         ByteBuffer dup = buffer.duplicate();
         dup.position(0);
         byte[] data = new byte[dup.remaining()];
         dup.get(data);
-        server.broadcast(data);
+        sendVideoFrame(data);
+    }
+
+    private void sendVideoFrame(byte[] data) {
+        IShowerVideoSink sink = videoSink;
+        if (sink != null) {
+            try {
+                sink.onVideoFrame(data);
+            } catch (Exception e) {
+                // Client may have died, invalidate the sink.
+                videoSink = null;
+            }
+        }
     }
 
     private synchronized void releaseDisplay() {
@@ -491,14 +617,14 @@ public class Main {
             try {
                 codec.signalEndOfInputStream();
             } catch (Exception e) {
-                Log.e(TAG, "signalEndOfInputStream failed", e);
+                logToFile("signalEndOfInputStream failed: " + e.getMessage(), e);
             }
         }
         if (encoderThread != null) {
             try {
                 encoderThread.join(1000);
             } catch (InterruptedException e) {
-                Log.e(TAG, "Encoder thread join interrupted", e);
+                logToFile("Encoder thread join interrupted: " + e.getMessage(), e);
                 Thread.currentThread().interrupt();
             }
             encoderThread = null;
@@ -507,7 +633,7 @@ public class Main {
             try {
                 codec.stop();
             } catch (Exception e) {
-                Log.e(TAG, "Error stopping codec", e);
+                logToFile("Error stopping codec: " + e.getMessage(), e);
             }
             codec.release();
         }
@@ -553,173 +679,8 @@ public class Main {
 
             logToFile("launchPackageOnVirtualDisplay: started " + packageName + " on display " + virtualDisplayId, null);
         } catch (Exception e) {
-            Log.e(TAG, "launchPackageOnVirtualDisplay failed", e);
             logToFile("launchPackageOnVirtualDisplay failed: " + e.getMessage(), e);
         }
     }
 
-    private final class ScreenWebSocketServer extends WebSocketServer {
-
-        ScreenWebSocketServer(InetSocketAddress address) {
-            super(address);
-        }
-
-        @Override
-        public void onOpen(WebSocket conn, ClientHandshake handshake) {
-            Log.i(TAG, "WebSocket client connected: " + conn.getRemoteSocketAddress());
-        }
-
-        @Override
-        public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-            Log.i(TAG, "WebSocket client disconnected: code=" + code + ", reason=" + reason);
-            new Thread(() -> {
-                try {
-                    Thread.sleep(15000);
-                    if (getConnections().isEmpty()) {
-                        Log.i(TAG, "Last WebSocket client disconnected,trying to stop server");
-                        stopServer();
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }).start();
-            
-        }
-
-        @Override
-        public void onMessage(WebSocket conn, String message) {
-            Log.i(TAG, "Received message: " + message);
-            logToFile("WS message: " + message, null);
-            // Simple text protocol:
-            //   CREATE_DISPLAY width height dpi
-            //   STOP
-            if (message == null) {
-                return;
-            }
-
-            String trimmed = message.trim();
-            if (trimmed.startsWith("CREATE_DISPLAY")) {
-                String[] parts = trimmed.split("\\s+");
-                int width = 1080;
-                int height = 1920;
-                int dpi = 320;
-                int bitRate = DEFAULT_BIT_RATE;
-                if (parts.length >= 4) {
-                    try {
-                        width = Integer.parseInt(parts[1]);
-                        height = Integer.parseInt(parts[2]);
-                        dpi = Integer.parseInt(parts[3]);
-                    } catch (NumberFormatException e) {
-                        Log.w(TAG, "Invalid CREATE_DISPLAY parameters, using defaults", e);
-                    }
-                }
-                if (parts.length >= 5) {
-                    try {
-                        int kbps = Integer.parseInt(parts[4]);
-                        if (kbps > 0) {
-                            bitRate = kbps * 1000;
-                        }
-                    } catch (NumberFormatException e) {
-                        logToFile("Invalid CREATE_DISPLAY bitrate, using default: " + trimmed, e);
-                    }
-                }
-                ensureVirtualDisplay(width, height, dpi, bitRate);
-            } else if (trimmed.startsWith("TAP")) {
-                String[] parts = trimmed.split("\\s+");
-                if (inputController != null && parts.length >= 3) {
-                    try {
-                        float x = Float.parseFloat(parts[1]);
-                        float y = Float.parseFloat(parts[2]);
-                        inputController.injectTap(x, y);
-                        logToFile("TAP injected: " + x + "," + y, null);
-                    } catch (NumberFormatException e) {
-                        logToFile("Invalid TAP params: " + trimmed, e);
-                    }
-                }
-            } else if (trimmed.startsWith("SWIPE")) {
-                String[] parts = trimmed.split("\\s+");
-                if (inputController != null && parts.length >= 6) {
-                    try {
-                        float x1 = Float.parseFloat(parts[1]);
-                        float y1 = Float.parseFloat(parts[2]);
-                        float x2 = Float.parseFloat(parts[3]);
-                        float y2 = Float.parseFloat(parts[4]);
-                        long duration = Long.parseLong(parts[5]);
-                        inputController.injectSwipe(x1, y1, x2, y2, duration);
-                        logToFile("SWIPE injected: " + x1 + "," + y1 + " -> " + x2 + "," + y2 + " d=" + duration, null);
-                    } catch (NumberFormatException e) {
-                        logToFile("Invalid SWIPE params: " + trimmed, e);
-                    }
-                }
-            } else if (trimmed.startsWith("TOUCH_DOWN")) {
-                String[] parts = trimmed.split("\\s+");
-                if (inputController != null && parts.length >= 3) {
-                    try {
-                        float x = Float.parseFloat(parts[1]);
-                        float y = Float.parseFloat(parts[2]);
-                        inputController.touchDown(x, y);
-                    } catch (NumberFormatException e) {
-                        logToFile("Invalid TOUCH_DOWN params: " + trimmed, e);
-                    }
-                }
-            } else if (trimmed.startsWith("TOUCH_MOVE")) {
-                String[] parts = trimmed.split("\\s+");
-                if (inputController != null && parts.length >= 3) {
-                    try {
-                        float x = Float.parseFloat(parts[1]);
-                        float y = Float.parseFloat(parts[2]);
-                        inputController.touchMove(x, y);
-                    } catch (NumberFormatException e) {
-                        logToFile("Invalid TOUCH_MOVE params: " + trimmed, e);
-                    }
-                }
-            } else if (trimmed.startsWith("TOUCH_UP")) {
-                String[] parts = trimmed.split("\\s+");
-                if (inputController != null && parts.length >= 3) {
-                    try {
-                        float x = Float.parseFloat(parts[1]);
-                        float y = Float.parseFloat(parts[2]);
-                        inputController.touchUp(x, y);
-                    } catch (NumberFormatException e) {
-                        logToFile("Invalid TOUCH_UP params: " + trimmed, e);
-                    }
-                }
-            } else if (trimmed.startsWith("KEY")) {
-                String[] parts = trimmed.split("\\s+");
-                if (inputController != null && parts.length >= 2) {
-                    try {
-                        int keyCode = Integer.parseInt(parts[1]);
-                        inputController.injectKey(keyCode);
-                        logToFile("KEY injected: " + keyCode, null);
-                    } catch (NumberFormatException e) {
-                        logToFile("Invalid KEY params: " + trimmed, e);
-                    }
-                }
-            } else if (trimmed.startsWith("SCREENSHOT")) {
-                handleScreenshotRequest(conn);
-            } else if (trimmed.startsWith("LAUNCH_APP")) {
-                String[] parts = trimmed.split("\\s+", 2);
-                if (parts.length >= 2) {
-                    String pkg = parts[1].trim();
-                    launchPackageOnVirtualDisplay(pkg);
-                } else {
-                    logToFile("LAUNCH_APP missing package name", null);
-                }
-            } else if (trimmed.startsWith("DESTROY_DISPLAY")) {
-                releaseDisplay();
-            } else if (trimmed.startsWith("STOP")) {
-                releaseDisplay();
-            }
-        }
-
-        @Override
-        public void onError(WebSocket conn, Exception ex) {
-            Log.e(TAG, "WebSocket error", ex);
-        }
-
-        @Override
-        public void onStart() {
-            Log.i(TAG, "WebSocket server started");
-        }
-    }
 }

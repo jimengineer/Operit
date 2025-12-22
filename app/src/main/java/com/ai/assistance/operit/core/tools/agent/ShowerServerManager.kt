@@ -2,13 +2,12 @@ package com.ai.assistance.operit.core.tools.agent
 
 import android.content.Context
 import com.ai.assistance.operit.core.tools.system.AndroidShellExecutor
+import com.ai.assistance.operit.core.tools.system.ShellIdentity
 import com.ai.assistance.operit.util.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import java.net.InetSocketAddress
-import java.net.Socket
 
 /**
  * Helper to manage the lifecycle of the Shower server (shower-server.jar) on the device.
@@ -28,9 +27,9 @@ object ShowerServerManager {
      * Returns true if the start command was issued successfully.
      */
     suspend fun ensureServerStarted(context: Context): Boolean {
-        // 0) If a Shower server is already listening on the default port, just reuse it.
-        if (isServerListening()) {
-            AppLogger.d(TAG, "Shower server already listening on 127.0.0.1:8986, skipping start")
+        // 0) If we already have an alive Binder from the Shizuku-style handoff, just reuse it.
+        if (ShowerBinderRegistry.hasAliveService()) {
+            AppLogger.d(TAG, "Shower Binder already cached and alive, skipping start")
             return true
         }
 
@@ -44,7 +43,7 @@ object ShowerServerManager {
 
         // 1) Kill existing server (ignore errors about missing process).
         // Use '|| true' so that the shell always exits with status 0 even if pkill finds nothing.
-        val killCmd = "pkill -f com.ai.assistance.shower.Main >/dev/null 2>&1 || true"
+        val killCmd = "pkill -f com.ai.assistance.shower.Main || true"
         AppLogger.d(TAG, "Stopping existing Shower server (if any) with command: $killCmd")
         AndroidShellExecutor.executeShellCommand(killCmd)
 
@@ -65,7 +64,7 @@ object ShowerServerManager {
         // This single background command should exit quickly with status 0 while the Java process continues.
         val startCmd = "CLASSPATH=$remoteJarPath app_process / com.ai.assistance.shower.Main &"
         AppLogger.d(TAG, "Starting Shower server with command: $startCmd")
-        val startResult = AndroidShellExecutor.executeShellCommand(startCmd)
+        val startResult = AndroidShellExecutor.executeShellCommand(startCmd, ShellIdentity.SHELL)
         if (!startResult.success) {
             AppLogger.e(
                 TAG,
@@ -73,19 +72,19 @@ object ShowerServerManager {
             )
             return false
         }
-        // Poll for up to 10 seconds for the server to start.
+        // Poll for up to 10 seconds for the Binder handoff broadcast to be received and cached.
         for (attempt in 0 until 50) { // 50 * 200ms = 10s
             kotlinx.coroutines.delay(200)
-            if (isServerListening()) {
+            if (ShowerBinderRegistry.hasAliveService()) {
                 AppLogger.d(
                     TAG,
-                    "Shower server is now listening on 127.0.0.1:8986 after ~${(attempt + 1) * 200}ms"
+                    "Shower Binder cached and alive after ~${(attempt + 1) * 200}ms"
                 )
                 return true
             }
         }
 
-        AppLogger.e(TAG, "Shower server did not start listening on 127.0.0.1:8986 within the expected time")
+        AppLogger.e(TAG, "Shower Binder was not received within the expected time")
         return false
     }
 
@@ -93,7 +92,7 @@ object ShowerServerManager {
      * Stop the Shower server process if running.
      */
     suspend fun stopServer(): Boolean {
-        val cmd = "pkill -f com.ai.assistance.shower.Main >/dev/null 2>&1 || true"
+        val cmd = "pkill -f com.ai.assistance.shower.Main || true"
         val result = AndroidShellExecutor.executeShellCommand(cmd)
         if (!result.success) {
             AppLogger.e(TAG, "Failed to stop Shower server: ${result.stderr}")
@@ -127,14 +126,5 @@ object ShowerServerManager {
         outFile
     }
 
-    private suspend fun isServerListening(): Boolean = withContext(Dispatchers.IO) {
-        return@withContext try {
-            Socket().use { socket ->
-                socket.connect(InetSocketAddress("127.0.0.1", 8986), 200)
-            }
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
+    // Binder registration is now handled via a Shizuku-style broadcast handoff.
 }

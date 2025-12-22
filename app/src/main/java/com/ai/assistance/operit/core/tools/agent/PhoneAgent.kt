@@ -798,7 +798,7 @@ class ActionHandler(
                         val dpi = metrics.densityDpi
 
                         // 提升 Shower 虚拟屏幕的视频码率，改善画质与文字清晰度
-                        val created = ShowerController.ensureDisplay(width, height, dpi, bitrateKbps = 3000)
+                        val created = ShowerController.ensureDisplay(context, width, height, dpi, bitrateKbps = 3000)
                         val launched = if (created && hasLaunchableTarget) ShowerController.launchApp(packageName) else false
 
                         if (created && launched) {

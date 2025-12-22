@@ -48,6 +48,7 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.ai.assistance.operit.services.ServiceLifecycleOwner
 import com.ai.assistance.operit.util.AppLogger
 import com.ai.assistance.operit.core.tools.agent.ShowerController
+import com.ai.assistance.operit.core.tools.agent.ShowerServerManager
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -58,6 +59,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.StrokeCap
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 import kotlin.math.*
 import kotlin.random.Random
 import com.ai.assistance.operit.ui.floating.ui.ball.rememberParticleSystem
@@ -232,6 +236,13 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
         runOnMainThread {
             try {
                 ShowerController.shutdown()
+                GlobalScope.launch(Dispatchers.IO) {
+                    try {
+                        ShowerServerManager.stopServer()
+                    } catch (e: Exception) {
+                        AppLogger.e("VirtualDisplayOverlay", "Error stopping Shower server", e)
+                    }
+                }
                 overlayView?.let { view ->
                     lifecycleOwner?.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
                     lifecycleOwner?.handleLifecycleEvent(Lifecycle.Event.ON_STOP)

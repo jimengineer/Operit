@@ -252,6 +252,15 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/voice_assistant_widget_info" />
         </receiver>
+
+        <!-- Receive Shower Binder handoff broadcast from the Shower server (Shizuku-style) -->
+        <receiver
+            android:name=".core.tools.agent.ShowerBinderReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.ai.assistance.operit.action.SHOWER_BINDER_READY" />
+            </intent-filter>
+        </receiver>
         
         <!-- Workflow Tasker Plugin Activity -->
         <activity
