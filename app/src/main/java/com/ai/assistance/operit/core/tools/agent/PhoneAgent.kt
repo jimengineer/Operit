@@ -1,5 +1,7 @@
 package com.ai.assistance.operit.core.tools.agent
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -928,9 +930,43 @@ class ActionHandler(
             "Type" -> {
                 val text = fields["text"] ?: ""
                 val exec = withAgentUiHiddenForAction(showerCtx) {
-                    val params = withDisplayParam(listOf(ToolParameter("text", text)))
-                    val result = toolImplementations.setInputText(AITool("set_input_text", params))
-                    if (result.success) ok() else fail(message = result.error ?: "Set input text failed")
+                    if (showerCtx.canUseShowerForInput) {
+                        try {
+                            AppLogger.d("ActionHandler", "Type via Shower: clearing field with KEYCODE_CLEAR")
+                            val cleared = ShowerController.key(KeyEvent.KEYCODE_CLEAR)
+                            if (!cleared) {
+                                return@withAgentUiHiddenForAction fail(message = "Shower CLEAR key failed")
+                            }
+
+                            delay(300)
+
+                            if (text.isEmpty()) {
+                                return@withAgentUiHiddenForAction ok()
+                            }
+
+                            val clipboard =
+                                context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                    ?: return@withAgentUiHiddenForAction fail(message = "Clipboard service not available")
+                            clipboard.setPrimaryClip(ClipData.newPlainText("operit_input", text))
+
+                            delay(100)
+
+                            AppLogger.d("ActionHandler", "Type via Shower: pasting text with KEYCODE_PASTE")
+                            val pasted = ShowerController.key(KeyEvent.KEYCODE_PASTE)
+                            if (!pasted) {
+                                return@withAgentUiHiddenForAction fail(message = "Shower PASTE key failed")
+                            }
+
+                            ok()
+                        } catch (e: Exception) {
+                            AppLogger.e("ActionHandler", "Error typing via Shower", e)
+                            fail(message = "Error typing via Shower: ${e.message}")
+                        }
+                    } else {
+                        val params = withDisplayParam(listOf(ToolParameter("text", text)))
+                        val result = toolImplementations.setInputText(AITool("set_input_text", params))
+                        if (result.success) ok() else fail(message = result.error ?: "Set input text failed")
+                    }
                 }
                 if (exec.success && !exec.shouldFinish) {
                     delay(POST_NON_WAIT_ACTION_DELAY_MS)

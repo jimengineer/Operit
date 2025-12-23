@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -527,47 +528,65 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                    var hasShowerDisplay by remember { mutableStateOf(ShowerController.getVideoSize() != null) }
-                    LaunchedEffect(Unit) {
-                        while (true) {
-                            val ready = ShowerController.getVideoSize() != null
-                            if (hasShowerDisplay != ready) {
-                                AppLogger.d(
-                                    "VirtualDisplayOverlay",
-                                    "OverlayCard: hasShowerDisplay changed from $hasShowerDisplay to $ready, videoSize=${ShowerController.getVideoSize()}"
-                                )
-                                hasShowerDisplay = ready
-                            }
-                            delay(500)
+                var hasShowerDisplay by remember { mutableStateOf(ShowerController.getVideoSize() != null) }
+                LaunchedEffect(Unit) {
+                    while (true) {
+                        val ready = ShowerController.getVideoSize() != null
+                        if (hasShowerDisplay != ready) {
+                            AppLogger.d(
+                                "VirtualDisplayOverlay",
+                                "OverlayCard: hasShowerDisplay changed from $hasShowerDisplay to $ready, videoSize=${ShowerController.getVideoSize()}"
+                            )
+                            hasShowerDisplay = ready
+                        }
+                        delay(500)
+                    }
+                }
+                if (id == 0 && hasShowerDisplay) {
+                    val density = LocalDensity.current
+
+                    // Always keep a single ShowerSurfaceView attached; only adjust its layout
+                    val videoModifier = when {
+                        // 全屏模式：保持原来的视频 fillMaxSize 布局
+                        isFullscreen -> Modifier.fillMaxSize()
+                        // 保持 ShowerSurfaceView 附着但几乎不可见，仅用于维持渲染管线
+                        snapped -> Modifier
+                            .size(1.dp)
+                            .align(if (snappedToRight) Alignment.CenterEnd else Alignment.CenterStart)
+                        else -> {
+                            // 小窗模式：左侧为固定宽度控制栏，右侧为原始大小的视频区域
+                            val videoWidthPx = (overlaySize.width - automationPanelWidthPx).coerceAtLeast(1)
+                            val videoWidthDp = with(density) { videoWidthPx.toDp() }
+                            Modifier
+                                .fillMaxHeight()
+                                // Right video region: keep the same size as before (matches 0.4x screen width)
+                                .width(videoWidthDp)
+                                .align(Alignment.CenterEnd)
                         }
                     }
-                    if (id == 0 && hasShowerDisplay) {
-                        if (isFullscreen) {
-                            // 全屏模式：保持原来的视频 fillMaxSize 布局
-                            Box(
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                AndroidView(
-                                    modifier = Modifier.fillMaxSize(),
-                                    factory = { ctx -> ShowerSurfaceView(ctx) }
-                                )
-                                LaunchedEffect(controlsVisible) {
-                                    if (controlsVisible) {
-                                        delay(3000)
-                                        controlsVisible = false
-                                    }
+
+                    Box(
+                        modifier = videoModifier
+                    ) {
+                        AndroidView(
+                            modifier = Modifier.fillMaxSize(),
+                            factory = { ctx -> ShowerSurfaceView(ctx) }
+                        )
+                        if (rainbowBorderVisible && !snapped) {
+                            RainbowStatusBorderOverlay()
+                        }
+
+                        if (!snapped) {
+                            // Auto-hide controls in both fullscreen and small-window modes
+                            LaunchedEffect(controlsVisible) {
+                                if (controlsVisible) {
+                                    delay(3000)
+                                    controlsVisible = false
                                 }
-                                if (controlsVisible && !isFullscreen) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.3f))
-                                    )
-                                }
-                                if (rainbowBorderVisible) {
-                                    RainbowStatusBorderOverlay()
-                                }
-                                // Fullscreen: top-right Windows-like controls, small white icons on pill background
+                            }
+
+                            if (isFullscreen) {
+                                // Fullscreen: top-right Windows-like controls over the video only
                                 Box(
                                     modifier = Modifier
                                         .align(Alignment.TopEnd)
@@ -634,142 +653,110 @@ class VirtualDisplayOverlay private constructor(private val context: Context) {
                                         }
                                     }
                                 }
-                            }
-                        } else {
-                            if (snapped) {
-                                Box(
-                                    modifier = Modifier.fillMaxSize()
-                                ) {
-                                    // 保持 ShowerSurfaceView 附着但几乎不可见，仅用于维持渲染管线
-                                    AndroidView(
-                                        modifier = Modifier.size(1.dp),
-                                        factory = { ctx -> ShowerSurfaceView(ctx) }
-                                    )
-
-                                    val handleShape = if (snappedToRight) {
-                                        RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp, topEnd = 0.dp, bottomEnd = 0.dp)
-                                    } else {
-                                        RoundedCornerShape(topStart = 0.dp, bottomStart = 0.dp, topEnd = 12.dp, bottomEnd = 12.dp)
-                                    }
-                                    val arrowIcon = if (snappedToRight) Icons.Filled.ChevronLeft else Icons.Filled.ChevronRight
-
+                            } else {
+                                // Small window: dim and show center controls only over the video region
+                                if (controlsVisible) {
                                     Box(
                                         modifier = Modifier
                                             .fillMaxSize()
-                                            .background(
-                                                color = Color.Gray.copy(alpha = 0.85f),
-                                                shape = handleShape
-                                            ),
-                                        contentAlignment = Alignment.Center
+                                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.3f))
+                                    )
+                                    Column(
+                                        modifier = Modifier.align(Alignment.Center),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Icon(
-                                            imageVector = arrowIcon,
-                                            contentDescription = "Restore",
-                                            modifier = Modifier.size(18.dp),
-                                            tint = Color.White
-                                        )
-                                    }
-                                }
-                            } else {
-                                // 小窗模式：左侧为固定宽度控制栏，右侧为原始大小的视频区域
-                                Row(
-                                    modifier = Modifier.fillMaxSize()
-                                ) {
-                                    // Left control panel area (fixed dp width)
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxHeight()
-                                            .width(automationPanelWidthDp)
-                                    ) {
-                                        if (automationVisible) {
-                                            val step = automationCurrentStep
-                                            val total = automationTotalSteps
-                                            if (step != null && total != null) {
-                                                AutomationControlBar(
-                                                    currentStep = step,
-                                                    totalSteps = total,
-                                                    isPaused = automationIsPaused,
-                                                    onTogglePauseResume = { newPaused ->
-                                                        automationIsPaused = newPaused
-                                                        automationOnTogglePauseResume?.invoke(newPaused)
-                                                    },
-                                                    onExit = { automationOnExit?.invoke() }
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    // Right video region: keep the same size as before (matches 0.4x screen width)
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxHeight()
-                                            .weight(1f)
-                                    ) {
-                                        AndroidView(
-                                            modifier = Modifier.fillMaxSize(),
-                                            factory = { ctx -> ShowerSurfaceView(ctx) }
-                                        )
-
-                                        LaunchedEffect(controlsVisible) {
-                                            if (controlsVisible) {
-                                                delay(3000)
-                                                controlsVisible = false
-                                            }
-                                        }
-                                        if (controlsVisible) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxSize()
-                                                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.3f))
+                                        IconButton(onClick = { snapToEdge() }) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.Minimize,
+                                                contentDescription = "Minimize to ball",
+                                                modifier = Modifier.size(32.dp)
                                             )
-                                            // Small window: Centered, vertical column (restore original layout)
-                                            Column(
-                                                modifier = Modifier.align(Alignment.Center),
-                                                horizontalAlignment = Alignment.CenterHorizontally,
-                                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                                            ) {
-                                                IconButton(onClick = { snapToEdge() }) {
-                                                    Icon(
-                                                        imageVector = Icons.Outlined.Minimize,
-                                                        contentDescription = "Minimize to ball",
-                                                        modifier = Modifier.size(32.dp)
-                                                    )
-                                                }
-                                                IconButton(onClick = { toggleFullScreen() }) {
-                                                    Icon(
-                                                        imageVector = Icons.Filled.Fullscreen,
-                                                        contentDescription = "Toggle Fullscreen",
-                                                        modifier = Modifier.size(32.dp)
-                                                    )
-                                                }
-                                                IconButton(onClick = { hide() }) {
-                                                    Icon(
-                                                        imageVector = Icons.Filled.Close,
-                                                        contentDescription = "Close",
-                                                        modifier = Modifier.size(32.dp)
-                                                    )
-                                                }
-                                            }
                                         }
-                                        if (rainbowBorderVisible) {
-                                            RainbowStatusBorderOverlay()
+                                        IconButton(onClick = { toggleFullScreen() }) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Fullscreen,
+                                                contentDescription = "Toggle Fullscreen",
+                                                modifier = Modifier.size(32.dp)
+                                            )
+                                        }
+                                        IconButton(onClick = { hide() }) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Close,
+                                                contentDescription = "Close",
+                                                modifier = Modifier.size(32.dp)
+                                            )
                                         }
                                     }
                                 }
                             }
                         }
-                    } else {
-                        AppLogger.d(
-                            "VirtualDisplayOverlay",
-                            "OverlayCard: Shower 虚拟屏尚未就绪, id=$id, hasShowerDisplay=$hasShowerDisplay, videoSize=${ShowerController.getVideoSize()}"
-                        )
-                        Text(
-                            text = "Shower 虚拟屏尚未就绪",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                        )
                     }
+
+                    if (snapped) {
+                        val handleShape = if (snappedToRight) {
+                            RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp, topEnd = 0.dp, bottomEnd = 0.dp)
+                        } else {
+                            RoundedCornerShape(topStart = 0.dp, bottomStart = 0.dp, topEnd = 12.dp, bottomEnd = 12.dp)
+                        }
+                        val arrowIcon = if (snappedToRight) Icons.Filled.ChevronLeft else Icons.Filled.ChevronRight
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    color = Color.Gray.copy(alpha = 0.85f),
+                                    shape = handleShape
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = arrowIcon,
+                                contentDescription = "Restore",
+                                modifier = Modifier.size(18.dp),
+                                tint = Color.White
+                            )
+                        }
+                    } else {
+                        if (!isFullscreen) {
+                            // 小窗模式：左侧为固定宽度控制栏，右侧为原始大小的视频区域
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .width(automationPanelWidthDp)
+                                    .align(Alignment.CenterStart)
+                            ) {
+                                if (automationVisible) {
+                                    val step = automationCurrentStep
+                                    val total = automationTotalSteps
+                                    if (step != null && total != null) {
+                                        AutomationControlBar(
+                                            currentStep = step,
+                                            totalSteps = total,
+                                            isPaused = automationIsPaused,
+                                            onTogglePauseResume = { newPaused ->
+                                                automationIsPaused = newPaused
+                                                automationOnTogglePauseResume?.invoke(newPaused)
+                                            },
+                                            onExit = { automationOnExit?.invoke() }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    AppLogger.d(
+                        "VirtualDisplayOverlay",
+                        "OverlayCard: Shower 虚拟屏尚未就绪, id=$id, hasShowerDisplay=$hasShowerDisplay, videoSize=${ShowerController.getVideoSize()}"
+                    )
+                    Text(
+                        text = "Shower 虚拟屏尚未就绪",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    )
                 }
+            }
         }
     }
     @Composable

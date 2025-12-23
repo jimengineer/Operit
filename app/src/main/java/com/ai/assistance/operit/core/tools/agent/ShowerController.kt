@@ -1,6 +1,7 @@
 package com.ai.assistance.operit.core.tools.agent
 
 import android.content.Context
+import com.ai.assistance.showerclient.ShowerVideoRenderer
 
 /**
  * Lightweight controller to talk to the Shower server running locally on the device.
@@ -23,7 +24,7 @@ object ShowerController {
     fun setBinaryHandler(handler: ((ByteArray) -> Unit)?) = core.setBinaryHandler(handler)
 
     suspend fun requestScreenshot(timeoutMs: Long = 3000L): ByteArray? =
-        core.requestScreenshot(timeoutMs)
+        ShowerVideoRenderer.captureCurrentFramePng()
 
     suspend fun ensureDisplay(
         context: Context,
