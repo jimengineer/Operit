@@ -2021,14 +2021,16 @@
     <string name="function_type_problem_library">Problem Library Management</string>
     <string name="function_type_file_binding">File Binding Processing</string>
     <string name="function_type_ui_controller">UI Controller</string>
-    
+    <string name="function_type_grep">Grep Retrieval</string>
+
     <!-- Function Descriptions -->
     <string name="function_desc_chat">Main chat function for daily conversation interaction with users</string>
     <string name="function_desc_summary">Generate conversation summaries for tracking important information</string>
     <string name="function_desc_problem_library">Used for problem library analysis and management</string>
     <string name="function_desc_file_binding">Process intelligent binding and mixing of file content, providing more precise code processing capabilities. Recommend using fast, inexpensive models like Gemini Flash, not recommended to use DeepSeek R1</string>
     <string name="function_desc_ui_controller">Used for automatic traversal and operation of UI interfaces. The corresponding UI controller model is only activated when the user explicitly requests to use an "agent" for control, for example by choosing dedicated models such as autoglm-phone-9b.</string>
-    
+    <string name="function_desc_grep">Used for grep_context planning and result filtering (multi-round grep_code)</string>
+
     <!-- Functional Prompt Config Screen -->
     <string name="advanced_config_notice">For advanced configurations like modifying system prompt templates, please go to the \"Manage All Prompts\" page.</string>
 
@@ -3609,5 +3611,15 @@
     <string name="help_mirror_latency_ms">%1$d ms</string>
     <string name="help_mirror_latency_timeout">Timeout</string>
     <string name="help_mirror_latency_testing">Testing...</string>
+
+    <string name="vd_overlay_a11y_minimize">Minimize</string>
+    <string name="vd_overlay_a11y_exit_fullscreen">Exit fullscreen</string>
+    <string name="vd_overlay_a11y_close">Close</string>
+    <string name="vd_overlay_a11y_minimize_to_ball">Minimize to ball</string>
+    <string name="vd_overlay_a11y_toggle_fullscreen">Toggle fullscreen</string>
+    <string name="vd_overlay_a11y_restore">Restore</string>
+    <string name="vd_overlay_a11y_pause_automation">Pause automation</string>
+    <string name="vd_overlay_a11y_resume_automation">Resume automation</string>
+    <string name="vd_overlay_a11y_stop_automation">Stop automation</string>
 
 </resources>

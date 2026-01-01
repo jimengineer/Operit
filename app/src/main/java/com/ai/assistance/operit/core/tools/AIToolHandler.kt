@@ -50,6 +50,10 @@ class AIToolHandler private constructor(private val context: Context) {
         return toolPermissionSystem
     }
     
+    fun unregisterTool(toolName: String) {
+        availableTools.remove(toolName)
+    }
+
     /**
      * Get all registered tool names
      */

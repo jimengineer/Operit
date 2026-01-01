@@ -65,7 +65,14 @@ private constructor(private val context: Context, private val packageManager: Pa
             AppLogger.d(TAG, "Executing function $functionName in package $packageName")
 
             // Execute the function in the script
-            val result = jsEngine.executeScriptFunction(script, functionName, params)
+            val stateId = packageManager.getActivePackageStateId(packageName)
+            val injectedParams = params.toMutableMap()
+            if (stateId != null) {
+                injectedParams["__operit_package_state"] = stateId
+            } else {
+                injectedParams.remove("__operit_package_state")
+            }
+            val result = jsEngine.executeScriptFunction(script, functionName, injectedParams)
 
             return result?.toString() ?: "null"
         } catch (e: Exception) {
@@ -101,6 +108,8 @@ private constructor(private val context: Context, private val packageManager: Pa
             val packageName = parts[0]
             val functionName = parts[1]
 
+            val stateId = packageManager.getActivePackageStateId(packageName)
+
             // Get tool definition from PackageManager to access parameter types
             val toolDefinition = packageManager.getPackageTools(packageName)?.tools?.find { it.name == functionName }
 
@@ -124,6 +133,13 @@ private constructor(private val context: Context, private val packageManager: Pa
                 param.name to convertedValue
             }
 
+            val injectedParams = params.toMutableMap()
+            if (stateId != null) {
+                injectedParams["__operit_package_state"] = stateId
+            } else {
+                injectedParams.remove("__operit_package_state")
+            }
+
             // Execute the script with timeout
             try {
                 withTimeout(JsTimeoutConfig.SCRIPT_TIMEOUT_MS) {
@@ -134,7 +150,7 @@ private constructor(private val context: Context, private val packageManager: Pa
                             jsEngine.executeScriptFunction(
                                     script,
                                     functionName,
-                                    params
+                                    injectedParams
                             ) { intermediateResult ->
                                 val resultString = intermediateResult?.toString() ?: "null"
                                 AppLogger.d(TAG, "Intermediate JS result: $resultString")

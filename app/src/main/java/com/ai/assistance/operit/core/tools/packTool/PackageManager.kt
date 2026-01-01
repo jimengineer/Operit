@@ -5,18 +5,27 @@ import com.ai.assistance.operit.util.AppLogger
 import com.ai.assistance.operit.core.tools.AIToolHandler
 import com.ai.assistance.operit.core.tools.StringResultData
 import com.ai.assistance.operit.core.tools.PackageToolExecutor
+import com.ai.assistance.operit.core.tools.PackageTool
 import com.ai.assistance.operit.core.tools.ToolPackage
+import com.ai.assistance.operit.core.tools.ToolPackageState
+import com.ai.assistance.operit.core.tools.agent.ShowerController
+import com.ai.assistance.operit.core.tools.condition.ConditionEvaluator
 import com.ai.assistance.operit.core.tools.javascript.JsEngine
 import com.ai.assistance.operit.core.tools.mcp.MCPManager
 import com.ai.assistance.operit.core.tools.mcp.MCPPackage
 import com.ai.assistance.operit.core.tools.mcp.MCPServerConfig
 import com.ai.assistance.operit.core.tools.mcp.MCPToolExecutor
 import com.ai.assistance.operit.core.tools.skill.SkillManager
+import com.ai.assistance.operit.core.tools.system.AndroidPermissionLevel
+import com.ai.assistance.operit.core.tools.system.ShizukuAuthorizer
+import com.ai.assistance.operit.data.preferences.DisplayPreferencesManager
 import com.ai.assistance.operit.data.preferences.EnvPreferences
+import com.ai.assistance.operit.data.preferences.androidPermissionPreferences
 import com.ai.assistance.operit.data.model.PackageToolPromptCategory
 import com.ai.assistance.operit.data.model.ToolPrompt
 import com.ai.assistance.operit.data.model.ToolResult
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.hjson.JsonValue
@@ -56,6 +65,10 @@ private constructor(private val context: Context, private val aiToolHandler: AIT
 
     // Map of package name to package description (all available packages in market)
     private val availablePackages = mutableMapOf<String, ToolPackage>()
+
+    private val activePackageToolNames = mutableMapOf<String, Set<String>>()
+
+    private val activePackageStateIds = ConcurrentHashMap<String, String?>()
 
     @Volatile
     private var isInitialized = false
@@ -226,6 +239,23 @@ private constructor(private val context: Context, private val aiToolHandler: AIT
                 }
             }
 
+            // 检查并修复 states.tools 数组中的元素，确保每个工具都有 script 字段
+            if (metadataJson.has("states") && metadataJson.get("states") is org.json.JSONArray) {
+                val statesArray = metadataJson.getJSONArray("states")
+                for (i in 0 until statesArray.length()) {
+                    val state = statesArray.optJSONObject(i) ?: continue
+                    if (state.has("tools") && state.get("tools") is org.json.JSONArray) {
+                        val toolsArray = state.getJSONArray("tools")
+                        for (j in 0 until toolsArray.length()) {
+                            val tool = toolsArray.getJSONObject(j)
+                            if (!tool.has("script")) {
+                                tool.put("script", "")
+                            }
+                        }
+                    }
+                }
+            }
+
             // 使用修改后的 JSON 字符串进行反序列化
             val jsonString = metadataJson.toString()
 
@@ -242,7 +272,17 @@ private constructor(private val context: Context, private val aiToolHandler: AIT
                     tool.copy(script = jsContent)
                 }
 
-            return packageMetadata.copy(tools = tools)
+            val states =
+                packageMetadata.states.map { state ->
+                    val stateTools =
+                        state.tools.map { tool ->
+                            validateToolFunctionExists(jsContent, tool.name)
+                            tool.copy(script = jsContent)
+                        }
+                    state.copy(tools = stateTools)
+                }
+
+            return packageMetadata.copy(tools = tools, states = states)
         } catch (e: Exception) {
             AppLogger.e(TAG, "Error parsing JS package: ${e.message}", e)
             return null
@@ -444,12 +484,13 @@ private constructor(private val context: Context, private val aiToolHandler: AIT
             }
 
             // Register the package tools with AIToolHandler
-            registerPackageTools(toolPackage)
+            val selectedPackage = selectToolPackageState(toolPackage)
+            registerPackageTools(selectedPackage)
 
             AppLogger.d(TAG, "Successfully loaded and activated package: $packageName")
 
             // Generate and return the system prompt enhancement
-            return generatePackageSystemPrompt(toolPackage)
+            return generatePackageSystemPrompt(selectedPackage)
         }
 
         // Then check if it's a Skill package
@@ -464,6 +505,10 @@ private constructor(private val context: Context, private val aiToolHandler: AIT
         }
 
         return "Package not found: $packageName. Please import it first or register it as an MCP server."
+    }
+
+    fun getActivePackageStateId(packageName: String): String? {
+        return activePackageStateIds[packageName]
     }
 
     /**
@@ -521,6 +566,13 @@ private constructor(private val context: Context, private val aiToolHandler: AIT
     private fun registerPackageTools(toolPackage: ToolPackage) {
         val packageToolExecutor = PackageToolExecutor(toolPackage, context, this)
 
+        val newToolNames = toolPackage.tools.map { packageTool -> "${toolPackage.name}:${packageTool.name}" }.toSet()
+        val oldToolNames = activePackageToolNames[toolPackage.name] ?: emptySet()
+        (oldToolNames - newToolNames).forEach { toolName ->
+            aiToolHandler.unregisterTool(toolName)
+        }
+        activePackageToolNames[toolPackage.name] = newToolNames
+
         // Register each tool with the format packageName:toolName
         toolPackage.tools.forEach { packageTool ->
             val toolName = "${toolPackage.name}:${packageTool.name}"
@@ -528,6 +580,74 @@ private constructor(private val context: Context, private val aiToolHandler: AIT
                 packageToolExecutor.invoke(tool)
             }
         }
+    }
+
+    private fun selectToolPackageState(toolPackage: ToolPackage): ToolPackage {
+        if (toolPackage.states.isEmpty()) {
+            activePackageStateIds.remove(toolPackage.name)
+            return toolPackage
+        }
+
+        val capabilities = buildConditionCapabilitiesSnapshot()
+        val selectedState = toolPackage.states.firstOrNull { state ->
+            ConditionEvaluator.evaluate(state.condition, capabilities)
+        }
+
+        if (selectedState == null) {
+            activePackageStateIds.remove(toolPackage.name)
+            return toolPackage
+        }
+
+        activePackageStateIds[toolPackage.name] = selectedState.id
+
+        val mergedTools = mergeToolsForState(toolPackage.tools, selectedState)
+        return toolPackage.copy(tools = mergedTools)
+    }
+
+    private fun mergeToolsForState(baseTools: List<PackageTool>, state: ToolPackageState): List<PackageTool> {
+        val toolMap = linkedMapOf<String, PackageTool>()
+        if (state.inheritTools) {
+            baseTools.forEach { toolMap[it.name] = it }
+        }
+        state.excludeTools.forEach { toolMap.remove(it) }
+        state.tools.forEach { toolMap[it.name] = it }
+        return toolMap.values.toList()
+    }
+
+    private fun buildConditionCapabilitiesSnapshot(): Map<String, Any?> {
+        val level = try {
+            androidPermissionPreferences.getPreferredPermissionLevel() ?: AndroidPermissionLevel.STANDARD
+        } catch (_: Exception) {
+            AndroidPermissionLevel.STANDARD
+        }
+
+        val shizukuAvailable = try {
+            ShizukuAuthorizer.isShizukuServiceRunning() && ShizukuAuthorizer.hasShizukuPermission()
+        } catch (_: Exception) {
+            false
+        }
+
+        val experimentalEnabled = try {
+            DisplayPreferencesManager.getInstance(context).isExperimentalVirtualDisplayEnabled()
+        } catch (_: Exception) {
+            true
+        }
+
+        val adbOrHigher = when (level) {
+            AndroidPermissionLevel.DEBUGGER,
+            AndroidPermissionLevel.ADMIN,
+            AndroidPermissionLevel.ROOT -> true
+            else -> false
+        }
+
+        val virtualDisplayCapable = adbOrHigher && experimentalEnabled && (level != AndroidPermissionLevel.DEBUGGER || shizukuAvailable)
+
+        return mapOf(
+            "ui.virtual_display" to virtualDisplayCapable,
+            "android.permission_level" to level,
+            "android.shizuku_available" to shizukuAvailable,
+            "ui.shower_display" to (try { ShowerController.getDisplayId("default") != null } catch (_: Exception) { false })
+        )
     }
 
     /** Generates a system prompt enhancement for the imported package */

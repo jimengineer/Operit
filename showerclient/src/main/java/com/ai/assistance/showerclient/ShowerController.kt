@@ -1,7 +1,9 @@
 package com.ai.assistance.showerclient
 
 import android.content.Context
+import android.os.DeadObjectException
 import android.os.IBinder
+import android.os.RemoteException
 import android.util.Log
 import com.ai.assistance.shower.IShowerService
 import com.ai.assistance.shower.IShowerVideoSink
@@ -160,34 +162,75 @@ class ShowerController {
         dpi: Int,
         bitrateKbps: Int? = null,
     ): Boolean = withContext(Dispatchers.IO) {
-        val service = getBinder(context) ?: return@withContext false
-        try {
-            // Align size
-            val alignedWidth = width and -8
-            val alignedHeight = height and -8
-            val targetWidth = if (alignedWidth > 0) alignedWidth else width
-            val targetHeight = if (alignedHeight > 0) alignedHeight else height
+        fun clearCachedBinder() {
+            binderService = null
+            ShowerBinderRegistry.setService(null)
+        }
 
+        fun resetLocalDisplayState() {
+            virtualDisplayId = null
+            videoWidth = 0
+            videoHeight = 0
+        }
+
+        fun isBinderDied(e: Throwable): Boolean {
+            return e is DeadObjectException || e is RemoteException || e.cause is DeadObjectException
+        }
+
+        // Align size
+        val alignedWidth = width and -8
+        val alignedHeight = height and -8
+        val targetWidth = if (alignedWidth > 0) alignedWidth else width
+        val targetHeight = if (alignedHeight > 0) alignedHeight else height
+        val bitrate = bitrateKbps ?: 0
+
+        suspend fun doEnsure(service: IShowerService): Boolean {
             // Changed: ensureDisplay now returns the ID and doesn't destroy existing ones.
-            val id = service.ensureDisplay(targetWidth, targetHeight, dpi, bitrateKbps ?: 0)
+            val id = service.ensureDisplay(targetWidth, targetHeight, dpi, bitrate)
             if (id < 0) {
-                virtualDisplayId = null
+                resetLocalDisplayState()
                 Log.e(TAG, "ensureDisplay: server reported invalid displayId=$id")
-                return@withContext false
+                return false
             }
-            
+
             virtualDisplayId = id
             videoWidth = targetWidth
             videoHeight = targetHeight
-            
+
             // Link local sink to this display on the server
             service.setVideoSink(id, videoSink.asBinder())
-            
+
             Log.d(TAG, "ensureDisplay complete, new displayId=$virtualDisplayId, size=${videoWidth}x${videoHeight}")
-            true
+            return true
+        }
+
+        val service = getBinder(context) ?: return@withContext false
+        try {
+            doEnsure(service)
         } catch (e: Exception) {
             Log.e(TAG, "ensureDisplay failed", e)
-            false
+            resetLocalDisplayState()
+            if (!isBinderDied(e)) {
+                return@withContext false
+            }
+
+            clearCachedBinder()
+            try {
+                Log.d(TAG, "ensureDisplay: binder died, restarting Shower server and retrying")
+                val ok = ShowerServerManager.ensureServerStarted(context.applicationContext)
+                if (!ok) {
+                    Log.e(TAG, "ensureDisplay: failed to restart Shower server")
+                    return@withContext false
+                }
+                delay(200)
+                val retryService = getBinder(context) ?: return@withContext false
+                doEnsure(retryService)
+            } catch (retryError: Exception) {
+                Log.e(TAG, "ensureDisplay retry failed", retryError)
+                resetLocalDisplayState()
+                clearCachedBinder()
+                false
+            }
         }
     }
 

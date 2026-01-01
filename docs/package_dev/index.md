@@ -39,6 +39,7 @@
 -   `complete(result: any): void`: 结束脚本执行并返回结果。
 -   `toolCall(name: string, params?: object): Promise<any>`: 在脚本内部调用其他工具。
 -   `getEnv(key: string): string | undefined`: 读取环境变量值。优先返回应用内“环境配置”界面中设置的值，其次尝试从系统环境变量中读取。常用于访问 API Key 等敏感配置，通常配合脚本 `METADATA` 中的 `env` 字段一起使用。
+-   `getState(): string | undefined`: 获取当前激活的包状态 ID（当包的 `METADATA` 定义了 `states` 时）。如果当前包未使用 states 或未命中任何 state，则返回 `undefined`。
 
 ### 核心类
 

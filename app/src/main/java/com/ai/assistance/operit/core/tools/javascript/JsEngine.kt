@@ -434,6 +434,18 @@ class JsEngine(private val context: Context) {
                 }
                 return undefined;
             }
+
+            function getState() {
+                try {
+                    var v = window['__operit_package_state'];
+                    if (v === null || v === undefined || v === "") {
+                        return undefined;
+                    }
+                    return String(v);
+                } catch (e) {
+                    return undefined;
+                }
+            }
             
             // 加载工具调用的便捷方法
             ${getJsToolsDefinition()}
@@ -717,6 +729,13 @@ class JsEngine(private val context: Context) {
             // 设置参数和执行状态
             var params = $paramsJson;
             window._hasCompleted = false;
+            try {
+                var __operitState = (params && params.__operit_package_state !== undefined && params.__operit_package_state !== null && String(params.__operit_package_state).length > 0)
+                    ? String(params.__operit_package_state)
+                    : undefined;
+                window['__operit_package_state'] = __operitState;
+            } catch (e) {
+            }
             
             // 设置安全超时机制
             window._safetyTimeout = setTimeout(function() {

@@ -10,12 +10,16 @@ import com.ai.assistance.operit.core.tools.FileInfoData
 import com.ai.assistance.operit.core.tools.FileOperationData
 import com.ai.assistance.operit.core.tools.FilePartContentData
 import com.ai.assistance.operit.core.tools.FindFilesResultData
+import com.ai.assistance.operit.core.tools.GrepResultData
 import com.ai.assistance.operit.core.tools.StringResultData
 import com.ai.assistance.operit.core.tools.ToolProgressBus
 import com.ai.assistance.operit.data.model.AITool
+import com.ai.assistance.operit.data.model.ToolParameter
 import com.ai.assistance.operit.data.model.ToolResult
 import com.ai.assistance.operit.util.FileUtils
 import com.ai.assistance.operit.core.tools.defaultTool.PathValidator
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Linux文件系统工具类，专门处理Linux环境下的文件操作
@@ -1126,6 +1130,10 @@ class LinuxFileSystemTools(context: Context) : StandardFileSystemTools(context) 
     override suspend fun grepCode(tool: AITool): ToolResult {
         val path = tool.parameters.find { it.name == "path" }?.value ?: ""
         val pattern = tool.parameters.find { it.name == "pattern" }?.value ?: ""
+        val filePattern = tool.parameters.find { it.name == "file_pattern" }?.value ?: "*"
+        val caseInsensitive =
+            tool.parameters.find { it.name == "case_insensitive" }?.value?.toBoolean() ?: false
+        val contextLines = tool.parameters.find { it.name == "context_lines" }?.value?.toIntOrNull() ?: 3
         val maxResults = tool.parameters.find { it.name == "max_results" }?.value?.toIntOrNull() ?: 100
         PathValidator.validateLinuxPath(path, tool.name)?.let { return it }
 
@@ -1147,18 +1155,187 @@ class LinuxFileSystemTools(context: Context) : StandardFileSystemTools(context) 
             )
         }
 
-        return ToolResult(
-            toolName = tool.name,
-            success = false,
-            result = StringResultData(""),
-            error = "Code search (grep) is not yet implemented for Linux environment"
-        )
+        val mergeNearbyMatches =
+            { matchedLines: List<Int>, ctx: Int ->
+                if (matchedLines.isEmpty()) {
+                    emptyList<List<Int>>()
+                } else {
+                    val sorted = matchedLines.sorted()
+                    val merged = mutableListOf<MutableList<Int>>()
+                    var currentGroup = mutableListOf(sorted[0])
+                    for (i in 1 until sorted.size) {
+                        val prev = sorted[i - 1]
+                        val curr = sorted[i]
+                        if (curr - prev <= 2 * ctx + 1) {
+                            currentGroup.add(curr)
+                        } else {
+                            merged.add(currentGroup)
+                            currentGroup = mutableListOf(curr)
+                        }
+                    }
+                    if (currentGroup.isNotEmpty()) merged.add(currentGroup)
+                    merged
+                }
+            }
+
+        return withContext(Dispatchers.IO) {
+            try {
+                val findFilesResult =
+                    findFiles(
+                        AITool(
+                            name = "find_files",
+                            parameters =
+                                listOf(
+                                    ToolParameter("path", path),
+                                    ToolParameter("pattern", filePattern)
+                                )
+                        )
+                    )
+
+                if (!findFilesResult.success) {
+                    return@withContext ToolResult(
+                        toolName = tool.name,
+                        success = false,
+                        result = StringResultData(""),
+                        error = "Failed to find files: ${findFilesResult.error}"
+                    )
+                }
+
+                val foundFiles = (findFilesResult.result as FindFilesResultData).files
+                if (foundFiles.isEmpty()) {
+                    return@withContext ToolResult(
+                        toolName = tool.name,
+                        success = true,
+                        result =
+                            GrepResultData(
+                                searchPath = path,
+                                pattern = pattern,
+                                matches = emptyList(),
+                                totalMatches = 0,
+                                filesSearched = 0,
+                                env = "linux"
+                            ),
+                        error = ""
+                    )
+                }
+
+                val regex = if (caseInsensitive) {
+                    Regex(pattern, RegexOption.IGNORE_CASE)
+                } else {
+                    Regex(pattern)
+                }
+
+                val fileMatches = mutableListOf<GrepResultData.FileMatch>()
+                var totalMatches = 0
+                var filesSearched = 0
+
+                for (filePath in foundFiles) {
+                    if (totalMatches >= maxResults) break
+                    filesSearched++
+
+                    val readResult =
+                        readFileFull(
+                            AITool(
+                                name = "read_file_full",
+                                parameters =
+                                    listOf(
+                                        ToolParameter("path", filePath),
+                                        ToolParameter("text_only", "true")
+                                    )
+                            )
+                        )
+
+                    if (!readResult.success) {
+                        continue
+                    }
+
+                    val fileContent = (readResult.result as FileContentData).content
+                    val lines = fileContent.lines()
+
+                    val matches = if (fileContent.length > 10_000_000) {
+                        val limitedContent = fileContent.take(10_000_000)
+                        regex.findAll(limitedContent)
+                    } else {
+                        regex.findAll(fileContent)
+                    }
+
+                    val matchedLineNumbers =
+                        matches
+                            .map { match -> fileContent.substring(0, match.range.first).count { it == '\n' } }
+                            .distinct()
+                            .sorted()
+                            .toList()
+
+                    if (matchedLineNumbers.isEmpty()) continue
+
+                    val mergedMatches = mergeNearbyMatches(matchedLineNumbers, contextLines)
+                    val lineMatches = mutableListOf<GrepResultData.LineMatch>()
+
+                    for (matchGroup in mergedMatches) {
+                        if (totalMatches >= maxResults) break
+                        val firstLine = matchGroup.first()
+                        val lastLine = matchGroup.last()
+                        val startIdx = maxOf(0, firstLine - contextLines)
+                        val endIdx = minOf(lines.size - 1, lastLine + contextLines)
+                        val context = lines.subList(startIdx, endIdx + 1).joinToString("\n")
+                        val matchedLinesContent = matchGroup.map { lines[it].trim() }.joinToString(" | ")
+
+                        lineMatches.add(
+                            GrepResultData.LineMatch(
+                                lineNumber = firstLine + 1,
+                                lineContent =
+                                    if (matchGroup.size == 1) {
+                                        lines[firstLine].trim()
+                                    } else {
+                                        "${matchGroup.size} matches: ${matchedLinesContent.take(200)}..."
+                                    },
+                                matchContext = context
+                            )
+                        )
+                        totalMatches++
+                    }
+
+                    if (lineMatches.isNotEmpty()) {
+                        fileMatches.add(
+                            GrepResultData.FileMatch(
+                                filePath = filePath,
+                                lineMatches = lineMatches
+                            )
+                        )
+                    }
+                }
+
+                ToolResult(
+                    toolName = tool.name,
+                    success = true,
+                    result =
+                        GrepResultData(
+                            searchPath = path,
+                            pattern = pattern,
+                            matches = fileMatches.take(20),
+                            totalMatches = totalMatches,
+                            filesSearched = filesSearched,
+                            env = "linux"
+                        ),
+                    error = ""
+                )
+            } catch (e: Exception) {
+                AppLogger.e(TAG, "grep_code (linux): Error - ${e.message}", e)
+                ToolResult(
+                    toolName = tool.name,
+                    success = false,
+                    result = StringResultData(""),
+                    error = "Error performing grep search: ${e.message}"
+                )
+            }
+        }
     }
 
     /** Linux上下文搜索 - 基于意图字符串查找相关文件或文件内的相关代码段 */
     override suspend fun grepContext(tool: AITool): ToolResult {
         val path = tool.parameters.find { it.name == "path" }?.value ?: ""
         val intent = tool.parameters.find { it.name == "intent" }?.value ?: ""
+        val filePattern = tool.parameters.find { it.name == "file_pattern" }?.value ?: "*"
         val maxResults = tool.parameters.find { it.name == "max_results" }?.value?.toIntOrNull() ?: 10
         
         PathValidator.validateLinuxPath(path, tool.name)?.let { return it }
@@ -1181,31 +1358,33 @@ class LinuxFileSystemTools(context: Context) : StandardFileSystemTools(context) 
             )
         }
 
-        // 检查是文件还是目录
         val isFile = fs.isFile(path)
-        
+
         if (isFile) {
-            // 文件模式：使用父类的实现（通过读取文件内容）
-            val result = grepContextInFile(path, intent, maxResults, tool.name)
-            return if (result.success && result.result is com.ai.assistance.operit.core.tools.GrepResultData) {
-                val data = result.result as com.ai.assistance.operit.core.tools.GrepResultData
-                ToolResult(
-                    toolName = result.toolName,
-                    success = true,
-                    result = data.copy(env = "linux"),
-                    error = result.error
-                )
-            } else {
-                result
-            }
+            val parent = path.substringBeforeLast('/', "")
+            val fileName = path.substringAfterLast('/')
+            val searchPath = if (parent.isNotBlank()) parent else "/"
+            return grepContextAgentic(
+                toolName = tool.name,
+                displayPath = path,
+                searchPath = searchPath,
+                environment = "linux",
+                intent = intent,
+                filePattern = fileName,
+                maxResults = maxResults,
+                envLabel = "linux"
+            )
         }
-        
-        // 目录模式暂不支持（需要实现Linux版本的文件搜索和评分）
-        return ToolResult(
+
+        return grepContextAgentic(
             toolName = tool.name,
-            success = false,
-            result = StringResultData(""),
-            error = "Directory mode for grep_context is not yet implemented for Linux environment. Please use file mode (provide a file path instead of a directory)."
+            displayPath = path,
+            searchPath = path,
+            environment = "linux",
+            intent = intent,
+            filePattern = filePattern,
+            maxResults = maxResults,
+            envLabel = "linux"
         )
     }
 

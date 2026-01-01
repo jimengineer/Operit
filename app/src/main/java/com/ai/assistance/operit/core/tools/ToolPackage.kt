@@ -19,6 +19,7 @@ data class ToolPackage(
     val name: String,
     val description: String,
     val tools: List<PackageTool>,
+    val states: List<ToolPackageState> = emptyList(),
     /**
      * Optional list of required environment variable names for this package.
      * If non-empty, PackageManager will validate that these variables exist
@@ -27,6 +28,15 @@ data class ToolPackage(
     val env: List<String> = emptyList(),
     val isBuiltIn: Boolean = false,
     val enabledByDefault: Boolean = false
+)
+
+@Serializable
+data class ToolPackageState(
+    val id: String,
+    val condition: String = "true",
+    val inheritTools: Boolean = false,
+    val excludeTools: List<String> = emptyList(),
+    val tools: List<PackageTool> = emptyList()
 )
 
 /**

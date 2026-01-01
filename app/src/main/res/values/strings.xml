@@ -2069,8 +2069,9 @@
     <string name="function_type_summary">对话总结</string>
     <string name="function_type_problem_library">问题库管理</string>
     <string name="function_type_file_binding">文件绑定处理</string>
-    <string name="function_type_ui_controller">UI 控制器</string>
+    <string name="function_type_ui_controller">UI控制器</string>
     <string name="function_type_translation">翻译功能</string>
+    <string name="function_type_grep">Grep检索</string>
     <string name="function_type_image_recognition">图像识别</string>
     <string name="function_type_audio_recognition">音频识别</string>
     <string name="function_type_video_recognition">视频识别</string>
@@ -2082,6 +2083,7 @@
     <string name="function_desc_file_binding">处理文件内容的智能绑定与混合，提供更精确的代码处理能力。建议使用快速的廉价模型如Gemini Flash，不建议使用DeepSeek R1</string>
     <string name="function_desc_ui_controller">用于UI界面的自动遍历与操作，对应的 UI 控制器模型仅在用户明确要求使用“智能体”控制时才会启用，例如可选择 autoglm 等专用模型。</string>
     <string name="function_desc_translation">提供多语言翻译功能，支持文本内容的语言转换。建议使用支持多语言的模型。</string>
+    <string name="function_desc_grep">用于grep_context的检索规划与结果筛选（多轮grep_code）</string>
     <string name="function_desc_image_recognition">用于图像内容识别和分析，调用read_file工具读取图片时支持intent参数进行深度理解。建议使用支持视觉的多模态模型。</string>
     <string name="function_desc_audio_recognition">用于音频内容识别和分析，调用read_file工具读取音频时可使用intent参数进行深度理解（如转写/总结/识别说话内容）。建议使用支持音频输入或高质量转写的模型。</string>
     <string name="function_desc_video_recognition">用于视频内容识别和分析，调用read_file工具读取视频时可使用intent参数进行深度理解（如抽帧理解/场景描述/对话总结）。建议使用支持视频/图像输入的多模态模型。</string>
@@ -3669,5 +3671,15 @@
     <string name="help_mirror_latency_ms">%1$dms</string>
     <string name="help_mirror_latency_timeout">超时</string>
     <string name="help_mirror_latency_testing">测试中...</string>
+
+    <string name="vd_overlay_a11y_minimize">最小化</string>
+    <string name="vd_overlay_a11y_exit_fullscreen">退出全屏</string>
+    <string name="vd_overlay_a11y_close">关闭</string>
+    <string name="vd_overlay_a11y_minimize_to_ball">最小化到小球</string>
+    <string name="vd_overlay_a11y_toggle_fullscreen">切换全屏</string>
+    <string name="vd_overlay_a11y_restore">恢复</string>
+    <string name="vd_overlay_a11y_pause_automation">暂停自动化</string>
+    <string name="vd_overlay_a11y_resume_automation">继续自动化</string>
+    <string name="vd_overlay_a11y_stop_automation">停止自动化</string>
 
 </resources>

@@ -6,13 +6,21 @@
 当用户提出需要帮忙完成某个界面操作任务（例如打开应用、搜索内容、在多个页面之间完成一套步骤）时，可以调用本包由子代理自动规划和执行具体步骤。
 '''
 
-    tools: [
+    tools: []
+
+    states: [
         {
-            name: "usage_advice"
-            description: '''
+            id: "virtual_display"
+            condition: "ui.virtual_display"
+            inheritTools: true
+            tools: [
+                {
+                    name: "usage_advice"
+                    description: '''
  UI子代理使用建议：
 
  - 会话复用（重要）：多次调用尽量复用同一个 agent_id（沿用上一次返回的 data.agentId），保持在同一虚拟屏/同一应用上下文内。
+ - 启动前置（非常重要）：当你第一次使用某个 agent_id（新建或更换 agent_id）时，intent 开头必须写“启动XXX应用 ...”，让子代理直接执行 Launch，而不是在桌面自己找。
  - 对话无状态（重要）：每次调用对子代理都是全新对话，intent 需要自带上下文，建议固定模板：
    当前任务已经完成: ...
    你需要在此基础上进一步完成: ...
@@ -80,41 +88,41 @@
         你需要在此基础上进一步完成: 输入并发送消息“我到楼下了”；发送后在消息列表中确认该消息出现在最新一条且无明显发送失败标记（如红色感叹号）。
         可能用到的信息: 若出现权限弹窗/键盘遮挡，先处理弹窗再继续；若发送失败，尝试重发一次并说明原因。
  '''
-            parameters: []
-        }
+                    parameters: []
+                }
 
-        {
-            name: "run_subagent"
-            description: '''
- 运行内置UI子代理（使用独立UI控制器模型）根据高层意图自动规划并执行一系列UI操作，例如自动点击、滑动、输入等。
+                {
+                    name: "run_subagent"
+                    description: '''
+ 运行内置UI子代理（使用独立UI控制器模型）根据高层意图自动规划并执行一系列UI操作，例如自动点击、滑动、输入等一系列界面操作。
 
  推荐：用于“单个明确子目标”或“清单阶段/单对象阶段”。多平台并行搜索、多入口确认等独立子任务优先用 run_subagent_parallel。
  '''
-            parameters: [
-                {
-                    name: "intent"
-                    description: "任务意图描述，例如：'打开微信并发送一条消息' 或 '在B站搜索某个视频'"
-                    type: "string"
-                    required: true
+                    parameters: [
+                        {
+                            name: "intent"
+                            description: "任务意图描述，例如：'打开微信并发送一条消息' 或 '在B站搜索某个视频'"
+                            type: "string"
+                            required: true
+                        }
+                        {
+                            name: "max_steps"
+                            description: "最大执行步数，默认20，可根据任务复杂度调整。"
+                            type: "number"
+                            required: false
+                        }
+                        {
+                            name: "agent_id"
+                            description: "可选：用于复用虚拟屏幕会话的 agentId。建议在多次调用时尽量传入同一个 agent_id（可沿用上一次返回的 data.agentId），否则会新建会话导致上下文/虚拟屏切换。"
+                            type: "string"
+                            required: false
+                        }
+                    ]
                 }
-                {
-                    name: "max_steps"
-                    description: "最大执行步数，默认20，可根据任务复杂度调整。"
-                    type: "number"
-                    required: false
-                }
-                {
-                    name: "agent_id"
-                    description: "可选：用于复用虚拟屏幕会话的 agentId。建议在多次调用时尽量传入同一个 agent_id（可沿用上一次返回的 data.agentId），否则会新建会话导致上下文/虚拟屏切换。"
-                    type: "string"
-                    required: false
-                }
-            ]
-        }
 
-        {
-            name: "run_subagent_parallel"
-            description: '''
+                {
+                    name: "run_subagent_parallel"
+                    description: '''
 并行运行 1-4 个 UI 子代理。
 
  注意：并行调用时，每个子代理对它自身都是全新对话，因此 intent_1..4 需要由主Agent分别写清楚“已完成/下一步/关键信息”。
@@ -123,105 +131,155 @@
  每个 intent_i 必须自包含；建议不同 agent_id；只重试失败的 intent_i。
  典型场景：多平台并行搜索；同一对象多入口确认/交叉校验；把“同一对象A”的分工并行做完后再进入B。
  '''
-            parameters: [
-                {
-                    name: "intent_1"
-                    description: "第1个子代理意图（推荐使用：当前任务已经完成/你需要进一步完成/可能用到的信息 三段式）"
-                    type: "string"
-                    required: true
+                    parameters: [
+                        {
+                            name: "intent_1"
+                            description: "第1个子代理意图（推荐使用：当前任务已经完成/你需要进一步完成/可能用到的信息 三段式）"
+                            type: "string"
+                            required: true
+                        }
+                        {
+                            name: "target_app_1"
+                            description: "第1个子代理目标应用名（必填，用于并行冲突检测；各分支必须不同）"
+                            type: "string"
+                            required: true
+                        }
+                        {
+                            name: "max_steps_1"
+                            description: "第1个子代理最大步数（默认20）"
+                            type: "number"
+                            required: false
+                        }
+                        {
+                            name: "agent_id_1"
+                            description: "第1个子代理 agent_id（可选，用于会话复用；并行建议不同）"
+                            type: "string"
+                            required: false
+                        }
+
+                        {
+                            name: "intent_2"
+                            description: "第2个子代理意图（可选）"
+                            type: "string"
+                            required: false
+                        }
+                        {
+                            name: "target_app_2"
+                            description: "第2个子代理目标应用名（当 intent_2 存在时必填；各分支必须不同）"
+                            type: "string"
+                            required: false
+                        }
+                        {
+                            name: "max_steps_2"
+                            description: "第2个子代理最大步数（默认20）"
+                            type: "number"
+                            required: false
+                        }
+                        {
+                            name: "agent_id_2"
+                            description: "第2个子代理 agent_id（可选）"
+                            type: "string"
+                            required: false
+                        }
+
+                        {
+                            name: "intent_3"
+                            description: "第3个子代理意图（可选）"
+                            type: "string"
+                            required: false
+                        }
+                        {
+                            name: "target_app_3"
+                            description: "第3个子代理目标应用名（当 intent_3 存在时必填；各分支必须不同）"
+                            type: "string"
+                            required: false
+                        }
+                        {
+                            name: "max_steps_3"
+                            description: "第3个子代理最大步数（默认20）"
+                            type: "number"
+                            required: false
+                        }
+                        {
+                            name: "agent_id_3"
+                            description: "第3个子代理 agent_id（可选）"
+                            type: "string"
+                            required: false
+                        }
+
+                        {
+                            name: "intent_4"
+                            description: "第4个子代理意图（可选）"
+                            type: "string"
+                            required: false
+                        }
+                        {
+                            name: "target_app_4"
+                            description: "第4个子代理目标应用名（当 intent_4 存在时必填；各分支必须不同）"
+                            type: "string"
+                            required: false
+                        }
+                        {
+                            name: "max_steps_4"
+                            description: "第4个子代理最大步数（默认20）"
+                            type: "number"
+                            required: false
+                        }
+                        {
+                            name: "agent_id_4"
+                            description: "第4个子代理 agent_id（可选）"
+                            type: "string"
+                            required: false
+                        }
+                    ]
                 }
+            ]
+        }
+
+        {
+            id: "main_screen"
+            condition: "!ui.virtual_display"
+            inheritTools: true
+            tools: [
                 {
-                    name: "target_app_1"
-                    description: "第1个子代理目标应用名（必填，用于并行冲突检测；各分支必须不同）"
-                    type: "string"
-                    required: true
-                }
-                {
-                    name: "max_steps_1"
-                    description: "第1个子代理最大步数（默认20）"
-                    type: "number"
-                    required: false
-                }
-                {
-                    name: "agent_id_1"
-                    description: "第1个子代理 agent_id（可选，用于会话复用；并行建议不同）"
-                    type: "string"
-                    required: false
+                    name: "usage_advice"
+                    description: '''
+ UI子代理使用建议（主屏模式）：
+
+ - 启动前置（非常重要）：当你第一次需要操作某个应用时，intent 开头必须写“启动XXX应用 ...”，让子代理直接执行 Launch，而不是在桌面自己找。
+ - 对话无状态（重要）：每次调用对子代理都是全新对话，intent 必须自带上下文，建议固定模板：
+   当前任务已经完成: ...
+   你需要在此基础上进一步完成: ...
+   可能用到的信息: ...
+ - 意图必须自包含（重要）：禁止使用“这五个/继续/同上/刚才说的”等指代。
+ - 严格串行（重要）：主屏模式不支持并行工具；一次只做一个明确子目标，必要时拆成多次调用。
+ - 不支持会话复用（重要）：主屏模式不支持 agent_id，会话复用相关策略不适用。
+ - 失败与完成（重要）：半成功不算完成；应继续纠错推进。仅在连续 2-3 次失败仍无法推进时才停止，并明确失败原因与可选替代方案。
+ '''
+                    parameters: []
                 }
 
                 {
-                    name: "intent_2"
-                    description: "第2个子代理意图（可选）"
-                    type: "string"
-                    required: false
-                }
-                {
-                    name: "target_app_2"
-                    description: "第2个子代理目标应用名（当 intent_2 存在时必填；各分支必须不同）"
-                    type: "string"
-                    required: false
-                }
-                {
-                    name: "max_steps_2"
-                    description: "第2个子代理最大步数（默认20）"
-                    type: "number"
-                    required: false
-                }
-                {
-                    name: "agent_id_2"
-                    description: "第2个子代理 agent_id（可选）"
-                    type: "string"
-                    required: false
-                }
+                    name: "run_subagent"
+                    description: '''
+ 运行内置UI子代理（主屏模式）。
 
-                {
-                    name: "intent_3"
-                    description: "第3个子代理意图（可选）"
-                    type: "string"
-                    required: false
-                }
-                {
-                    name: "target_app_3"
-                    description: "第3个子代理目标应用名（当 intent_3 存在时必填；各分支必须不同）"
-                    type: "string"
-                    required: false
-                }
-                {
-                    name: "max_steps_3"
-                    description: "第3个子代理最大步数（默认20）"
-                    type: "number"
-                    required: false
-                }
-                {
-                    name: "agent_id_3"
-                    description: "第3个子代理 agent_id（可选）"
-                    type: "string"
-                    required: false
-                }
-
-                {
-                    name: "intent_4"
-                    description: "第4个子代理意图（可选）"
-                    type: "string"
-                    required: false
-                }
-                {
-                    name: "target_app_4"
-                    description: "第4个子代理目标应用名（当 intent_4 存在时必填；各分支必须不同）"
-                    type: "string"
-                    required: false
-                }
-                {
-                    name: "max_steps_4"
-                    description: "第4个子代理最大步数（默认20）"
-                    type: "number"
-                    required: false
-                }
-                {
-                    name: "agent_id_4"
-                    description: "第4个子代理 agent_id（可选）"
-                    type: "string"
-                    required: false
+ 注意：主屏模式不支持 agent_id 会话复用，也不支持并行工具。
+ '''
+                    parameters: [
+                        {
+                            name: "intent"
+                            description: "任务意图描述，例如：'打开微信并发送一条消息' 或 '在B站搜索某个视频'"
+                            type: "string"
+                            required: true
+                        }
+                        {
+                            name: "max_steps"
+                            description: "最大执行步数，默认20，可根据任务复杂度调整。"
+                            type: "number"
+                            required: false
+                        }
+                    ]
                 }
             ]
         }
@@ -231,7 +289,24 @@
 
 const UIAutomationSubAgentTools = (function () {
 
-    let cachedAgentId: string | undefined;
+    const CACHE_KEY = '__operit_ui_subagent_cached_agent_id';
+    function getCachedAgentId(): string | undefined {
+        try {
+            return (globalThis as any)[CACHE_KEY];
+        } catch (_e) {
+            return undefined;
+        }
+    }
+    function setCachedAgentId(value: any) {
+        try {
+            if (value === undefined || value === null || String(value).length === 0) {
+                delete (globalThis as any)[CACHE_KEY];
+            } else {
+                (globalThis as any)[CACHE_KEY] = String(value);
+            }
+        } catch (_e) {
+        }
+    }
 
     interface ToolResponse {
         success: boolean;
@@ -239,32 +314,46 @@ const UIAutomationSubAgentTools = (function () {
         data?: any;
     }
 
+    function getPackageState(): string | undefined {
+        try {
+            return getState();
+        } catch (_e) {
+            return undefined;
+        }
+    }
+
     async function usage_advice(_params: {}): Promise<ToolResponse> {
+        const state = getPackageState();
+        const isMainScreen = String(state).toLowerCase() === 'main_screen';
         return {
             success: true,
             message: 'UI子代理使用建议',
             data: {
-                advice:
-                    "会话复用：尽量复用 agent_id（沿用 data.agentId）.\n" +
-                    "对话无状态：每次调用是新对话，intent 写清 已完成/下一步/关键信息.\n" +
-                    "自包含：别用‘这五个/继续/同上’；多对象要么列清单+当前目标，要么先让子代理在当前页识别并复述清单.\n" +
-                    "对齐+并行：先清单后逐项(A→B→C)；独立子任务/同一对象多入口优先并行(run_subagent_parallel)，只重试失败分支.\n" +
-                    "并行资源约束：并行分支数必须受可用独立App/虚拟屏数量限制；同一个App/包名不能同时出现在两个虚拟屏/两个agent_id 中并行操作（会坏）。并行调用必须传 target_app_i=目标应用名，且各分支 target_app_i 不能重复；第2次/第N次并行不得擅自提高并行度，保持上限，只重试失败分支或改串行。\n" +
-                    "失败与完成：半成功不算完成；未达成目标继续推进，连续 2-3 次失败再停并说明原因.\n" +
-                    "\n" +
-                    "例子1（并行，多平台差评）：run_subagent_parallel 分别写清点评/美团/携程的三段式 intent，并为每个分支使用不同 agent_id；只重试失败分支.\n" +
-                    "例子2（串行，先清单后逐项）：第1次 run_subagent 只产出清单并返回 agentId=A；后续每次 run_subagent 复用 A，且在 intent 里显式写‘已完成=清单… 当前目标=第k个… 下一步=只处理该对象’，按 A→B→C 推进.\n" +
-                    "例子3（串行，发消息）：第1次打开并确认聊天页标题；第2次复用同一 agent_id 发送并确认发送成功/失败标记.",
+                advice: isMainScreen
+                    ? ("主屏模式：不支持 agent_id，会话复用策略不适用；不支持并行工具，一次只做一个明确子目标（必要时拆多次）。\n" +
+                        "启动前置（非常重要）：当你第一次需要操作某个应用时，intent 开头必须写“启动XXX应用 ...”，让子代理直接执行 Launch，而不是在桌面自己找。\n" +
+                        "对话无状态：每次调用是新对话，intent 写清 已完成/下一步/关键信息。\n" +
+                        "自包含：别用‘这五个/继续/同上’；多对象要么列清单+当前目标，要么先让子代理在当前页识别并复述清单。\n" +
+                        "失败与完成：半成功不算完成；未达成目标继续推进，连续 2-3 次失败再停并说明原因。")
+                    : ("虚拟屏模式：尽量复用 agent_id（沿用 data.agentId）保持同一虚拟屏/同一应用上下文。\n" +
+                        "启动前置（非常重要）：当你第一次使用某个 agent_id（新建或更换 agent_id）时，intent 开头必须写“启动XXX应用 ...”，让子代理直接执行 Launch，而不是在桌面自己找。\n" +
+                        "对话无状态：每次调用是新对话，intent 写清 已完成/下一步/关键信息。\n" +
+                        "自包含：别用‘这五个/继续/同上’；多对象要么列清单+当前目标，要么先让子代理在当前页识别并复述清单。\n" +
+                        "对齐+并行：先清单后逐项(A→B→C)；独立子任务/同一对象多入口优先并行(run_subagent_parallel)，只重试失败分支。\n" +
+                        "并行资源约束：并行分支数必须受可用独立App/虚拟屏数量限制；同一个App/包名不能同时出现在两个虚拟屏/两个agent_id 中并行操作（会坏）。并行调用必须传 target_app_i=目标应用名，且各分支 target_app_i 不能重复；第2次/第N次并行不得擅自提高并行度，保持上限，只重试失败分支或改串行。\n" +
+                        "失败与完成：半成功不算完成；未达成目标继续推进，连续 2-3 次失败再停并说明原因。"
+                    ),
             },
         };
     }
 
+
     async function run_subagent(params: { intent: string, max_steps?: number, agent_id?: string }): Promise<ToolResponse> {
         const { intent, max_steps, agent_id } = params;
-        const agentIdToUse = (agent_id && String(agent_id).length > 0) ? String(agent_id) : cachedAgentId;
+        const agentIdToUse = (agent_id && String(agent_id).length > 0) ? String(agent_id) : getCachedAgentId();
         const result = await Tools.UI.runSubAgent(intent, max_steps, agentIdToUse);
         if (result && (result as any).agentId) {
-            cachedAgentId = String((result as any).agentId);
+            setCachedAgentId((result as any).agentId);
         }
         return {
             success: true,

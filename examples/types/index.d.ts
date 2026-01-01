@@ -153,6 +153,8 @@ declare global {
     // Get environment variable function
     function getEnv(key: string): string | undefined;
 
+    function getState(): string | undefined;
+
     // Utility objects
     const _: {
         isEmpty(value: any): boolean;

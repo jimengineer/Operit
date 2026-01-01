@@ -306,6 +306,53 @@ METADATA
     -   `description`: 工具功能的描述。
     -   `parameters`: 工具接受的参数列表，每个参数都应定义 `name`, `description`, `type`, 和 `required`。
 
+### 3.1.1. 动态工具集：`states`
+
+当同一个脚本在不同设备能力/权限等级下需要暴露不同工具集（或同名工具需要不同的说明/参数约束）时，可以在 `METADATA` 中使用 `states` 字段。
+
+`states` 为一个数组，每个元素是一个“状态”（State）。系统会根据运行时能力（capabilities）按顺序评估每个 state 的 `condition`，选择第一个为 `true` 的 state 并激活。
+
+#### State 结构
+
+-   `id`: 状态 ID（字符串），用于脚本侧识别当前状态。
+-   `condition`: 条件表达式（字符串），使用“类 JS”布尔表达式语法。
+-   `inheritTools`: 是否继承顶层 `tools`（布尔值）。
+-   `excludeTools`: 需要从继承工具中排除的工具名列表（字符串数组）。
+-   `tools`: 该 state 额外提供的工具列表（同 `tools` 的元素结构）。如果与继承工具同名，则覆盖其定义。
+
+#### 选择规则
+
+-   若 `states` 为空：使用顶层 `tools`。
+-   若 `states` 非空：从上到下找第一个满足 `condition` 的 state。
+    -   找不到任何匹配：回退到顶层 `tools`。
+
+#### 合并规则
+
+-   当 `inheritTools=true`：以顶层 `tools` 为基底。
+-   先应用 `excludeTools` 删除指定工具。
+-   再将 state 的 `tools` 合并进来（同名覆盖，不同名新增）。
+
+#### Condition 语法（简述）
+
+-   字面量：`true` / `false` / `null`
+-   逻辑：`!` / `&&` / `||`
+-   比较：`==` / `!=` / `>` / `>=` / `<` / `<=`
+-   成员测试：`in`（示例：`android.permission_level in ['ADMIN','ROOT']`）
+-   括号：`(...)`
+-   数组字面量：`[...]`
+
+#### 可用 capability key（内置）
+
+-   `ui.virtual_display`: 是否具备虚拟屏能力（boolean）
+-   `android.permission_level`: 权限等级（enum，会以字符串形式参与比较）
+-   `android.shizuku_available`: Shizuku 是否可用（boolean）
+-   `ui.shower_display`: Shower 虚拟屏是否可用（boolean）
+
+#### 脚本侧获取当前 state
+
+运行时会向脚本环境提供全局函数 `getState(): string | undefined`，返回当前激活的 state 的 `id`。
+当当前包未使用 states 或未命中任何 state 时，返回 `undefined`。
+
 ### 3.2. 脚本执行与结束
 
 脚本中的每个工具函数都是异步的。当工具函数完成其任务后，**必须**调用全局的 `complete()` 函数来结束执行并返回结果。

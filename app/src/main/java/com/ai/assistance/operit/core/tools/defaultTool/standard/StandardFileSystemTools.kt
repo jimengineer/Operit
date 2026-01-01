@@ -41,6 +41,9 @@ import com.ai.assistance.operit.util.MediaPoolManager
 import com.ai.assistance.operit.util.HttpMultiPartDownloader
 import com.ai.assistance.operit.util.FFmpegUtil
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
@@ -55,8 +58,13 @@ import com.ai.assistance.operit.terminal.TerminalManager
 import com.ai.assistance.operit.terminal.provider.filesystem.FileSystemProvider
 import com.ai.assistance.operit.terminal.utils.SSHFileConnectionManager
 import com.ai.assistance.operit.core.tools.defaultTool.PathValidator
-import com.ai.assistance.operit.services.OnnxEmbeddingService
 import com.ai.assistance.operit.core.tools.ToolProgressBus
+import com.ai.assistance.operit.api.chat.llmprovider.AIService
+import com.ai.assistance.operit.data.model.FunctionType
+import com.ai.assistance.operit.data.model.ModelParameter
+import com.ai.assistance.operit.data.preferences.FunctionalConfigManager
+import com.ai.assistance.operit.data.preferences.ModelConfigManager
+import org.json.JSONObject
 
 /**
  * Collection of file system operation tools for the AI assistant These tools use Java File APIs for
@@ -116,6 +124,331 @@ open class StandardFileSystemTools(protected val context: Context) {
     /** 检查是否是Linux环境 */
     protected fun isLinuxEnvironment(environment: String?): Boolean {
         return environment?.lowercase() == "linux"
+    }
+
+    protected data class GrepContextCandidate(
+        val filePath: String,
+        val lineNumber: Int,
+        val lineContent: String,
+        val matchContext: String?,
+        val query: String,
+        val round: Int
+    )
+
+    protected suspend fun getGrepService(): AIService {
+        return EnhancedAIService.getAIServiceForFunction(context, FunctionType.GREP)
+    }
+
+    protected suspend fun getGrepModelParameters(): List<ModelParameter<*>> {
+        val functionalConfigManager = FunctionalConfigManager(context)
+        functionalConfigManager.initializeIfNeeded()
+        val modelConfigManager = ModelConfigManager(context)
+        val mapping = functionalConfigManager.getConfigMappingForFunction(FunctionType.GREP)
+        return modelConfigManager.getModelParametersForConfig(mapping.configId)
+    }
+
+    protected suspend fun runGrepModel(prompt: String): String {
+        val service = getGrepService()
+        val modelParameters = getGrepModelParameters()
+        val sb = StringBuilder()
+        val stream =
+            service.sendMessage(
+                message = prompt,
+                chatHistory = emptyList(),
+                modelParameters = modelParameters,
+                enableThinking = false,
+                stream = false,
+                availableTools = null
+            )
+        stream.collect { chunk -> sb.append(chunk) }
+        return sb.toString().trim()
+    }
+
+    protected fun extractFirstJsonObject(text: String): JSONObject? {
+        val start = text.indexOf('{')
+        val end = text.lastIndexOf('}')
+        if (start < 0 || end <= start) return null
+        return try {
+            JSONObject(text.substring(start, end + 1))
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    protected fun parseQueryListFromModelOutput(text: String, fallback: List<String>): List<String> {
+        val obj = extractFirstJsonObject(text) ?: return fallback
+        val arr = obj.optJSONArray("queries") ?: return fallback
+        val queries = mutableListOf<String>()
+        for (i in 0 until arr.length()) {
+            val q = arr.optString(i, "").trim()
+            if (q.isNotBlank()) queries.add(q)
+        }
+        return if (queries.isEmpty()) fallback else queries
+    }
+
+    protected fun parseSelectedIdsFromModelOutput(text: String): List<Int> {
+        val obj = extractFirstJsonObject(text) ?: return emptyList()
+        val arr = obj.optJSONArray("selected") ?: return emptyList()
+        val ids = mutableListOf<Int>()
+        for (i in 0 until arr.length()) {
+            val v = arr.optInt(i, -1)
+            if (v >= 0) ids.add(v)
+        }
+        return ids
+    }
+
+    protected fun normalizeQueries(queries: List<String>): List<String> {
+        val seen = LinkedHashSet<String>()
+        for (q in queries) {
+            val trimmed = q.trim()
+            if (trimmed.isNotBlank()) {
+                seen.add(trimmed)
+            }
+        }
+        return seen.toList()
+    }
+
+    protected fun buildCandidateDigestForModel(
+        candidates: List<GrepContextCandidate>,
+        maxCharsPerItem: Int
+    ): String {
+        if (candidates.isEmpty()) return "(no matches)"
+        val sb = StringBuilder()
+        candidates.forEachIndexed { idx, c ->
+            sb.append("#").append(idx)
+                .append(" file=").append(c.filePath)
+                .append(" line=").append(c.lineNumber)
+                .append(" round=").append(c.round)
+                .append(" query=\"").append(c.query.replace("\"", "'"))
+                .append("\"\n")
+
+            val ctx = (c.matchContext ?: c.lineContent).trim()
+            val limited = if (ctx.length > maxCharsPerItem) ctx.take(maxCharsPerItem) else ctx
+            sb.append(limited).append("\n\n")
+        }
+        return sb.toString().trim()
+    }
+
+    protected suspend fun runGrepCodeBatch(
+        searchPath: String,
+        environment: String?,
+        filePattern: String,
+        queries: List<String>,
+        perQueryMaxResults: Int,
+        round: Int
+    ): Pair<List<GrepContextCandidate>, Int> {
+        val limitedQueries = queries.take(8)
+        val results = coroutineScope {
+            limitedQueries.map { query ->
+                async {
+                    grepCode(
+                        AITool(
+                            name = "grep_code",
+                            parameters =
+                                listOf(
+                                    ToolParameter("path", searchPath),
+                                    ToolParameter("pattern", query),
+                                    ToolParameter("file_pattern", filePattern),
+                                    ToolParameter("case_insensitive", "true"),
+                                    ToolParameter("context_lines", "3"),
+                                    ToolParameter("max_results", perQueryMaxResults.toString()),
+                                    ToolParameter("environment", environment ?: "")
+                                )
+                        )
+                    )
+                }
+            }.awaitAll()
+        }
+
+        val candidates = mutableListOf<GrepContextCandidate>()
+        var maxFilesSearched = 0
+        val dedup = HashSet<String>()
+
+        results.forEachIndexed { idx, res ->
+            if (!res.success) return@forEachIndexed
+            val data = res.result as? GrepResultData ?: return@forEachIndexed
+            maxFilesSearched = maxOf(maxFilesSearched, data.filesSearched)
+            val query = limitedQueries.getOrNull(idx) ?: ""
+
+            data.matches.forEach { fm ->
+                fm.lineMatches.forEach { lm ->
+                    val key = "${fm.filePath}#${lm.lineNumber}#${(lm.matchContext ?: "").take(120)}"
+                    if (!dedup.add(key)) return@forEach
+                    candidates.add(
+                        GrepContextCandidate(
+                            filePath = fm.filePath,
+                            lineNumber = lm.lineNumber,
+                            lineContent = lm.lineContent,
+                            matchContext = lm.matchContext,
+                            query = query,
+                            round = round
+                        )
+                    )
+                }
+            }
+        }
+
+        return Pair(candidates, maxFilesSearched)
+    }
+
+    protected suspend fun grepContextAgentic(
+        toolName: String,
+        displayPath: String,
+        searchPath: String,
+        environment: String?,
+        intent: String,
+        filePattern: String,
+        maxResults: Int,
+        envLabel: String
+    ): ToolResult {
+        return try {
+            val initialPrompt =
+                """
+你是一个代码检索助手。你需要为 grep_code 工具生成用于搜索的正则表达式。
+
+用户意图：$intent
+搜索路径：$displayPath
+文件过滤：$filePattern
+
+要求：
+1) 输出严格 JSON，不要输出任何其他文字。
+2) 生成 8 个 queries，每个 query 是一个正则表达式字符串。
+
+输出格式：{"queries":["...", "...", "...", "...", "...", "...", "...", "..."]}
+""".trimIndent()
+
+            val fallback = listOf(intent.take(60)).filter { it.isNotBlank() }
+            val initialRaw = runGrepModel(initialPrompt)
+            var queries = normalizeQueries(parseQueryListFromModelOutput(initialRaw, fallback)).take(8)
+            if (queries.isEmpty()) queries = fallback
+
+            val allCandidates = mutableListOf<GrepContextCandidate>()
+            var filesSearched = 0
+
+            for (round in 1..3) {
+                ToolProgressBus.update(toolName, (round - 1) / 4f, "Searching (round $round/3)...")
+                val (batchCandidates, batchFilesSearched) =
+                    runGrepCodeBatch(
+                        searchPath = searchPath,
+                        environment = environment,
+                        filePattern = filePattern,
+                        queries = queries,
+                        perQueryMaxResults = 30,
+                        round = round
+                    )
+
+                filesSearched = maxOf(filesSearched, batchFilesSearched)
+                allCandidates.addAll(batchCandidates)
+
+                if (round < 3) {
+                    val digest = buildCandidateDigestForModel(batchCandidates.take(24), 800)
+                    val refinePrompt =
+                        """
+你是一个代码检索助手。你需要根据上一轮 grep_code 的命中结果，进一步改进搜索 query。
+
+用户意图：$intent
+搜索路径：$displayPath
+文件过滤：$filePattern
+
+上一轮命中摘要：
+$digest
+
+要求：
+1) 输出严格 JSON，不要输出任何其他文字。
+2) 生成 8 个 queries，尽量与已命中的文件/符号更相关，避免与上一轮重复。
+
+输出格式：{"queries":["...", "...", "...", "...", "...", "...", "...", "..."]}
+""".trimIndent()
+                    val refinedRaw = runGrepModel(refinePrompt)
+                    val refined = normalizeQueries(parseQueryListFromModelOutput(refinedRaw, queries)).take(8)
+                    queries = refined.ifEmpty { queries }
+                }
+            }
+
+            if (allCandidates.isEmpty()) {
+                ToolProgressBus.update(toolName, 1f, "Search completed, found 0")
+                return ToolResult(
+                    toolName = toolName,
+                    success = true,
+                    result =
+                        GrepResultData(
+                            searchPath = displayPath,
+                            pattern = intent,
+                            matches = emptyList(),
+                            totalMatches = 0,
+                            filesSearched = filesSearched,
+                            env = envLabel
+                        ),
+                    error = ""
+                )
+            }
+
+            val selectionDigest = buildCandidateDigestForModel(allCandidates.take(60), 1000)
+            val selectPrompt =
+                """
+你是一个代码检索助手。你需要从候选片段中选择最相关的部分。
+
+用户意图：$intent
+搜索路径：$displayPath
+
+候选列表（每条以 #id 开头）：
+$selectionDigest
+
+要求：
+1) 输出严格 JSON，不要输出任何其他文字。
+2) 从候选中选择最多 $maxResults 条，按相关度从高到低输出 id。
+
+输出格式：{"selected":[0,1,2]}
+""".trimIndent()
+
+            val selectedIds = parseSelectedIdsFromModelOutput(runGrepModel(selectPrompt))
+            val selectedCandidates =
+                if (selectedIds.isNotEmpty()) {
+                    selectedIds.mapNotNull { id -> allCandidates.getOrNull(id) }.take(maxResults)
+                } else {
+                    allCandidates.take(maxResults)
+                }
+
+            val fileOrder = selectedCandidates.map { it.filePath }.distinct()
+            val fileMatches =
+                fileOrder.map { filePath ->
+                    val lineMatches =
+                        selectedCandidates
+                            .filter { it.filePath == filePath }
+                            .map {
+                                GrepResultData.LineMatch(
+                                    lineNumber = it.lineNumber,
+                                    lineContent = it.lineContent,
+                                    matchContext = it.matchContext
+                                )
+                            }
+                    GrepResultData.FileMatch(filePath = filePath, lineMatches = lineMatches)
+                }
+
+            ToolProgressBus.update(toolName, 1f, "Search completed, found ${selectedCandidates.size}")
+            ToolResult(
+                toolName = toolName,
+                success = true,
+                result =
+                    GrepResultData(
+                        searchPath = displayPath,
+                        pattern = intent,
+                        matches = fileMatches,
+                        totalMatches = selectedCandidates.size,
+                        filesSearched = filesSearched,
+                        env = envLabel
+                    ),
+                error = ""
+            )
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "Error performing context search", e)
+            ToolResult(
+                toolName = toolName,
+                success = false,
+                result = StringResultData(""),
+                error = "Error performing context search: ${e.message}"
+            )
+        }
     }
 
     /** Adds line numbers to a string of content. */
@@ -1015,6 +1348,7 @@ open class StandardFileSystemTools(protected val context: Context) {
         return withContext(Dispatchers.IO) {
             try {
                 val file = File(path)
+
                 if (!file.exists() || !file.isFile) {
                     return@withContext ToolResult(
                         toolName = tool.name,
@@ -3373,7 +3707,7 @@ open class StandardFileSystemTools(protected val context: Context) {
                     if (now - last < 200L) return@download
                     if (!lastEmitMs.compareAndSet(last, now)) return@download
 
-                    val p = if (total > 0L) (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 0.99f) else -1f
+                    val p = if (total > 0L) (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f) else -1f
                     val msg =
                         if (total > 0L) {
                             val percent = ((downloaded.toDouble() / total.toDouble()) * 100.0).toInt().coerceIn(0, 99)
@@ -3771,14 +4105,6 @@ open class StandardFileSystemTools(protected val context: Context) {
         }
     }
 
-    /**
-     * Grep上下文搜索工具 - 基于意图字符串查找相关文件或文件内的相关代码段
-     * 使用语义相关性评分来匹配最相关的内容
-     * 
-     * 支持两种模式：
-     * 1. 目录模式：path 是目录，搜索最相关的文件
-     * 2. 文件模式：path 是文件，搜索文件内最相关的代码段
-     */
     open suspend fun grepContext(tool: AITool): ToolResult {
         val path = tool.parameters.find { it.name == "path" }?.value ?: ""
         val environment = tool.parameters.find { it.name == "environment" }?.value
@@ -3786,21 +4112,6 @@ open class StandardFileSystemTools(protected val context: Context) {
         val filePattern = tool.parameters.find { it.name == "file_pattern" }?.value ?: "*"
         val maxResults = tool.parameters.find { it.name == "max_results" }?.value?.toIntOrNull() ?: 10
 
-        // 检查 OnnxEmbeddingService 是否初始化
-        if (!OnnxEmbeddingService.isInitialized()) {
-            try {
-                OnnxEmbeddingService.initialize(context)
-            } catch (e: Exception) {
-                return ToolResult(
-                    toolName = tool.name,
-                    success = false,
-                    result = StringResultData(""),
-                    error = "Failed to initialize embedding service: ${e.message}"
-                )
-            }
-        }
-
-        // 如果是Linux环境，委托给LinuxFileSystemTools
         if (isLinuxEnvironment(environment)) {
             return linuxTools.grepContext(tool)
         }
@@ -3826,149 +4137,25 @@ open class StandardFileSystemTools(protected val context: Context) {
 
         return try {
             val file = File(path)
-            
-            // 检查是文件还是目录
             if (file.isFile) {
-                // 文件模式：搜索文件内的相关代码段
-                return grepContextInFile(path, intent, maxResults, tool.name)
-            }
-            
-            // 目录模式：搜索相关文件
-            // 1. 查找所有匹配的文件
-            val findFilesResult = findFiles(
-                AITool(
-                    name = "find_files",
-                    parameters = listOf(
-                        ToolParameter("path", path),
-                        ToolParameter("pattern", filePattern),
-                        ToolParameter("use_path_pattern", "false"),
-                        ToolParameter("case_insensitive", "false"),
-                        ToolParameter("environment", environment ?: "")
-                    )
+                grepContextInFile(
+                    path = path,
+                    intent = intent,
+                    maxResults = maxResults,
+                    toolName = tool.name
                 )
-            )
-
-            if (!findFilesResult.success) {
-                return ToolResult(
+            } else {
+                grepContextAgentic(
                     toolName = tool.name,
-                    success = false,
-                    result = StringResultData(""),
-                    error = "Failed to find files: ${findFilesResult.error}"
-                )
-            }
-
-            val foundFiles = (findFilesResult.result as FindFilesResultData).files
-
-            if (foundFiles.isEmpty()) {
-                return ToolResult(
-                    toolName = tool.name,
-                    success = true,
-                    result = GrepResultData(
-                        searchPath = path,
-                        pattern = intent,
-                        matches = emptyList(),
-                        totalMatches = 0,
-                        filesSearched = 0
-                    )
-                )
-            }
-
-            // 2. 生成意图的向量
-            val intentEmbedding = OnnxEmbeddingService.generateEmbedding(intent)
-            if (intentEmbedding == null) {
-                return ToolResult(
-                    toolName = tool.name,
-                    success = false,
-                    result = StringResultData(""),
-                    error = "Failed to generate embedding for intent"
-                )
-            }
-
-            // 3. 为每个文件计算相关性评分（基于向量相似度）
-            data class FileScore(val path: String, val score: Double)
-            val fileScores = mutableListOf<FileScore>()
-
-            // 限制最多处理的文件数，避免生成向量过慢
-            val filesToProcess = foundFiles.take(50) 
-
-            for (filePath in filesToProcess) {
-                val currentFile = File(filePath)
-                
-                // 跳过目录，只处理文件
-                if (!currentFile.isFile) {
-                    continue
-                }
-                
-                val fileName = currentFile.name
-                val fileExt = currentFile.extension.lowercase()
-                
-                // 只读取前20行（使用 readFilePart，虽然返回内容带行号但不影响向量生成）
-                val readResult = readFilePart(
-                    AITool(
-                        name = "read_file_part",
-                        parameters = listOf(
-                            ToolParameter("path", filePath),
-                            ToolParameter("start_line", "1"),
-                            ToolParameter("end_line", "20")
-                        )
-                    )
-                )
-
-                val fileContent = if (readResult.success) {
-                    (readResult.result as FilePartContentData).content
-                } else {
-                    ""
-                }
-                
-                // 组合文件名和内容作为代表性文本
-                // 给予文件名更高的权重（通过重复文件名）
-                val representativeText = "File: $fileName. $fileName. Content: ${fileContent.take(500)}"
-                
-                val fileEmbedding = OnnxEmbeddingService.generateEmbedding(representativeText)
-                if (fileEmbedding != null) {
-                    var similarity = OnnxEmbeddingService.cosineSimilarity(intentEmbedding, fileEmbedding)
-                    
-                    // 对文档类文件降低权重，避免其在代码搜索中占据优势
-                    val docExtensions = setOf("md", "txt", "doc", "docx", "pdf", "rst", "adoc")
-                    if (fileExt in docExtensions) {
-                        similarity *= 0.7f // 降低30%权重
-                    }
-                    
-                    if (similarity > 0.2) { // 设定一个最小相似度阈值
-                        fileScores.add(FileScore(filePath, similarity.toDouble()))
-                    }
-                }
-            }
-
-            // 4. 按评分排序并取top N
-            val topFiles = fileScores.sortedByDescending { it.score }.take(maxResults)
-
-            // 5. 构建返回结果（目录模式：只显示文件路径和相关度，不显示内容预览）
-            val fileMatches = topFiles.map { fileScore ->
-                GrepResultData.FileMatch(
-                    filePath = fileScore.path,
-                    lineMatches = listOf(
-                        GrepResultData.LineMatch(
-                            lineNumber = 0,
-                            lineContent = "语义相关度: ${String.format("%.4f", fileScore.score)}",
-                            matchContext = null // 不显示文件内容预览
-                        )
-                    )
-                )
-            }
-
-            ToolResult(
-                toolName = tool.name,
-                success = true,
-                result = GrepResultData(
+                    displayPath = path,
                     searchPath = path,
-                    pattern = intent,
-                    matches = fileMatches,
-                    totalMatches = fileMatches.size,
-                    filesSearched = foundFiles.size
+                    environment = null,
+                    intent = intent,
+                    filePattern = filePattern,
+                    maxResults = maxResults,
+                    envLabel = "android"
                 )
-            )
-
+            }
         } catch (e: Exception) {
             AppLogger.e(TAG, "Error performing context search", e)
             ToolResult(
@@ -3980,137 +4167,24 @@ open class StandardFileSystemTools(protected val context: Context) {
         }
     }
 
-    /**
-     * 在单个文件内搜索与意图最相关的代码段
-     */
     protected suspend fun grepContextInFile(
         path: String,
         intent: String,
         maxResults: Int,
         toolName: String
     ): ToolResult {
-        return try {
-            // 1. 读取文件内容
-            val readResult = readFileFull(
-                AITool(
-                    name = "read_file_full",
-                    parameters = listOf(ToolParameter("path", path))
-                )
-            )
-
-            if (!readResult.success) {
-                return ToolResult(
-                    toolName = toolName,
-                    success = false,
-                    result = StringResultData(""),
-                    error = "Failed to read file: ${readResult.error}"
-                )
-            }
-
-            val fileContent = (readResult.result as FileContentData).content
-            val lines = fileContent.lines()
-            
-            if (lines.isEmpty()) {
-                return ToolResult(
-                    toolName = toolName,
-                    success = true,
-                    result = GrepResultData(
-                        searchPath = path,
-                        pattern = intent,
-                        matches = emptyList(),
-                        totalMatches = 0,
-                        filesSearched = 1
-                    )
-                )
-            }
-
-            // 2. 生成意图向量
-            val intentEmbedding = OnnxEmbeddingService.generateEmbedding(intent)
-            if (intentEmbedding == null) {
-                return ToolResult(
-                    toolName = toolName,
-                    success = false,
-                    result = StringResultData(""),
-                    error = "Failed to generate embedding for intent"
-                )
-            }
-
-            // 3. 将文件分段（按固定行数或代码块）
-            val segments = segmentFileContent(lines)
-
-            // 4. 为每个代码段评分
-            data class SegmentScore(
-                val startLine: Int,
-                val endLine: Int,
-                val score: Double,
-                val content: String
-            )
-
-            val segmentScores = mutableListOf<SegmentScore>()
-
-            for (segment in segments) {
-                val segmentContent = lines.subList(segment.first, segment.second + 1).joinToString("\n")
-                val segmentEmbedding = OnnxEmbeddingService.generateEmbedding(segmentContent)
-                
-                if (segmentEmbedding != null) {
-                    val similarity = OnnxEmbeddingService.cosineSimilarity(intentEmbedding, segmentEmbedding)
-                    
-                    if (similarity > 0.2) {
-                        segmentScores.add(
-                            SegmentScore(
-                                startLine = segment.first,
-                                endLine = segment.second,
-                                score = similarity.toDouble(),
-                                content = segmentContent
-                            )
-                        )
-                    }
-                }
-            }
-
-            // 5. 按评分排序并取 top N
-            val topSegments = segmentScores.sortedByDescending { it.score }.take(maxResults)
-
-            // 6. 构建返回结果
-            val fileMatches = listOf(
-                GrepResultData.FileMatch(
-                    filePath = path,
-                    lineMatches = topSegments.map { segment ->
-                        // 取前3行作为预览
-                        val previewLines = segment.content.lines().take(3)
-                        val preview = previewLines.joinToString(" | ")
-                        val hasMore = segment.content.lines().size > 3
-                        
-                        GrepResultData.LineMatch(
-                            lineNumber = segment.startLine + 1, // 1-indexed
-                            lineContent = "相关度: ${String.format("%.4f", segment.score)} | ${preview}${if (hasMore) "..." else ""}",
-                            matchContext = null // 不使用 matchContext，避免行号重复显示
-                        )
-                    }
-                )
-            )
-
-            ToolResult(
-                toolName = toolName,
-                success = true,
-                result = GrepResultData(
-                    searchPath = path,
-                    pattern = intent,
-                    matches = fileMatches,
-                    totalMatches = topSegments.size,
-                    filesSearched = 1
-                )
-            )
-
-        } catch (e: Exception) {
-            AppLogger.e(TAG, "Error performing context search in file", e)
-            ToolResult(
-                toolName = toolName,
-                success = false,
-                result = StringResultData(""),
-                error = "Error performing context search in file: ${e.message}"
-            )
-        }
+        val file = File(path)
+        val parent = file.parent ?: path
+        return grepContextAgentic(
+            toolName = toolName,
+            displayPath = path,
+            searchPath = parent,
+            environment = null,
+            intent = intent,
+            filePattern = file.name,
+            maxResults = maxResults,
+            envLabel = "android"
+        )
     }
 
     /**

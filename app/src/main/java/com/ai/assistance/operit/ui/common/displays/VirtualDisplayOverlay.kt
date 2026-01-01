@@ -68,7 +68,10 @@ import kotlin.math.*
 import kotlin.random.Random
 import com.ai.assistance.operit.ui.floating.ui.ball.rememberParticleSystem
 import androidx.core.graphics.drawable.toBitmap
+import com.ai.assistance.operit.data.preferences.UserPreferencesManager
+import com.ai.assistance.operit.R
 import java.util.concurrent.ConcurrentHashMap
+import androidx.compose.ui.res.stringResource
 
 class VirtualDisplayOverlay private constructor(private val context: Context, private val agentId: String) {
 
@@ -214,14 +217,23 @@ class VirtualDisplayOverlay private constructor(private val context: Context, pr
             AppLogger.d("VirtualDisplayOverlay", "show: agentId=$agentId displayId=$displayId")
             ensureOverlay()
             overlayView?.visibility = View.VISIBLE
+            val uiAccessibilityModeEnabled = try {
+                UserPreferencesManager.getInstance(context).isUiAccessibilityModeEnabled()
+            } catch (_: Exception) {
+                false
+            }
             if (!hadView) {
                 isFullscreen = false
                 val isFirstShow = (lastWindowWidth == 0 || lastWindowHeight == 0)
-                isSnapped = true
+                isSnapped = !uiAccessibilityModeEnabled
                 if (isFirstShow) {
                     snappedToRight = true
                 }
                 controlsVisible = false
+            } else if (uiAccessibilityModeEnabled) {
+                if (!isFullscreen && isSnapped) {
+                    isSnapped = false
+                }
             }
             updateLayoutParams()
         }
@@ -588,7 +600,13 @@ class VirtualDisplayOverlay private constructor(private val context: Context, pr
                             )
                         }
                     } else {
-                        Modifier
+                        Modifier.pointerInput(id, isFullscreen, overlaySize, snapped) {
+                            detectTapGestures(
+                                onTap = {
+                                    controlsVisible = true
+                                }
+                            )
+                        }
                     }
                 )
                 .clip(RoundedCornerShape(0.dp))
@@ -711,7 +729,7 @@ class VirtualDisplayOverlay private constructor(private val context: Context, pr
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Outlined.Minimize,
-                                                contentDescription = "Minimize",
+                                                contentDescription = stringResource(R.string.vd_overlay_a11y_minimize),
                                                 modifier = Modifier.size(18.dp),
                                                 tint = Color.White
                                             )
@@ -727,7 +745,7 @@ class VirtualDisplayOverlay private constructor(private val context: Context, pr
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Filled.FullscreenExit,
-                                                contentDescription = "Exit Fullscreen",
+                                                contentDescription = stringResource(R.string.vd_overlay_a11y_exit_fullscreen),
                                                 modifier = Modifier.size(18.dp),
                                                 tint = Color.White
                                             )
@@ -743,7 +761,7 @@ class VirtualDisplayOverlay private constructor(private val context: Context, pr
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Filled.Close,
-                                                contentDescription = "Close",
+                                                contentDescription = stringResource(R.string.vd_overlay_a11y_close),
                                                 modifier = Modifier.size(18.dp),
                                                 tint = Color.White
                                             )
@@ -766,21 +784,21 @@ class VirtualDisplayOverlay private constructor(private val context: Context, pr
                                         IconButton(onClick = { snapToEdge() }) {
                                             Icon(
                                                 imageVector = Icons.Outlined.Minimize,
-                                                contentDescription = "Minimize to ball",
+                                                contentDescription = stringResource(R.string.vd_overlay_a11y_minimize_to_ball),
                                                 modifier = Modifier.size(32.dp)
                                             )
                                         }
                                         IconButton(onClick = { toggleFullScreen() }) {
                                             Icon(
                                                 imageVector = Icons.Filled.Fullscreen,
-                                                contentDescription = "Toggle Fullscreen",
+                                                contentDescription = stringResource(R.string.vd_overlay_a11y_toggle_fullscreen),
                                                 modifier = Modifier.size(32.dp)
                                             )
                                         }
                                         IconButton(onClick = { hide() }) {
                                             Icon(
                                                 imageVector = Icons.Filled.Close,
-                                                contentDescription = "Close",
+                                                contentDescription = stringResource(R.string.vd_overlay_a11y_close),
                                                 modifier = Modifier.size(32.dp)
                                             )
                                         }
@@ -846,7 +864,7 @@ class VirtualDisplayOverlay private constructor(private val context: Context, pr
                                     ) {
                                         Image(
                                             bitmap = appIconBitmap!!,
-                                            contentDescription = "Restore",
+                                            contentDescription = stringResource(R.string.vd_overlay_a11y_restore),
                                             modifier = Modifier.fillMaxSize()
                                         )
                                     }
@@ -859,7 +877,7 @@ class VirtualDisplayOverlay private constructor(private val context: Context, pr
                                     ) {
                                         Icon(
                                             imageVector = arrowIcon,
-                                            contentDescription = "Restore",
+                                            contentDescription = stringResource(R.string.vd_overlay_a11y_restore),
                                             modifier = Modifier.fillMaxSize(),
                                             tint = Color.White
                                         )
@@ -900,11 +918,239 @@ class VirtualDisplayOverlay private constructor(private val context: Context, pr
                         "VirtualDisplayOverlay",
                         "OverlayCard: Shower 虚拟屏尚未就绪, id=$id, hasShowerDisplay=$hasShowerDisplay, videoSize=${ShowerController.getVideoSize(agentId)}"
                     )
-                    Text(
-                        text = "Shower 虚拟屏尚未就绪",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                    )
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (!snapped) {
+                            LaunchedEffect(controlsVisible) {
+                                if (controlsVisible) {
+                                    delay(3000)
+                                    controlsVisible = false
+                                }
+                            }
+                        }
+
+                        if (snapped) {
+                            val handleShape = RoundedCornerShape(12.dp)
+                            val arrowIcon = if (snappedToRight) Icons.Filled.ChevronLeft else Icons.Filled.ChevronRight
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        color = Color.Gray.copy(alpha = 0.85f),
+                                        shape = handleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = arrowIcon,
+                                    contentDescription = stringResource(R.string.vd_overlay_a11y_restore),
+                                    modifier = Modifier.size(30.dp),
+                                    tint = Color.White
+                                )
+                            }
+                        } else {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Shower 虚拟屏尚未就绪",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                )
+                            }
+
+                            if (!isFullscreen) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .width(automationPanelWidthDp)
+                                        .align(Alignment.CenterStart)
+                                ) {
+                                    if (automationVisible) {
+                                        val step = automationCurrentStep
+                                        val total = automationTotalSteps
+                                        if (step != null && total != null) {
+                                            AutomationControlBar(
+                                                currentStep = step,
+                                                totalSteps = total,
+                                                isPaused = automationIsPaused,
+                                                onTogglePauseResume = { newPaused ->
+                                                    automationIsPaused = newPaused
+                                                    automationOnTogglePauseResume?.invoke(newPaused)
+                                                },
+                                                onExit = { automationOnExit?.invoke() }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (isFullscreen) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(12.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(999.dp))
+                                            .background(Color.Black.copy(alpha = 0.45f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        IconButton(
+                                            onClick = {
+                                                toggleFullScreen()
+                                                snapToEdge()
+                                            },
+                                            modifier = Modifier.size(32.dp),
+                                            colors = IconButtonDefaults.iconButtonColors(
+                                                contentColor = Color.White,
+                                                containerColor = Color.Transparent
+                                            )
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.Minimize,
+                                                contentDescription = stringResource(R.string.vd_overlay_a11y_minimize),
+                                                modifier = Modifier.size(18.dp),
+                                                tint = Color.White
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { toggleFullScreen() },
+                                            modifier = Modifier.size(32.dp),
+                                            colors = IconButtonDefaults.iconButtonColors(
+                                                contentColor = Color.White,
+                                                containerColor = Color.Transparent
+                                            )
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.FullscreenExit,
+                                                contentDescription = stringResource(R.string.vd_overlay_a11y_exit_fullscreen),
+                                                modifier = Modifier.size(18.dp),
+                                                tint = Color.White
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { hide() },
+                                            modifier = Modifier.size(32.dp),
+                                            colors = IconButtonDefaults.iconButtonColors(
+                                                contentColor = Color.White,
+                                                containerColor = Color.Transparent
+                                            )
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Close,
+                                                contentDescription = stringResource(R.string.vd_overlay_a11y_close),
+                                                modifier = Modifier.size(18.dp),
+                                                tint = Color.White
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(12.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(999.dp))
+                                            .background(Color.Black.copy(alpha = 0.35f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        IconButton(
+                                            onClick = { snapToEdge() },
+                                            modifier = Modifier.size(32.dp),
+                                            colors = IconButtonDefaults.iconButtonColors(
+                                                contentColor = Color.White,
+                                                containerColor = Color.Transparent
+                                            )
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.Minimize,
+                                                contentDescription = stringResource(R.string.vd_overlay_a11y_minimize),
+                                                modifier = Modifier.size(18.dp),
+                                                tint = Color.White
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { toggleFullScreen() },
+                                            modifier = Modifier.size(32.dp),
+                                            colors = IconButtonDefaults.iconButtonColors(
+                                                contentColor = Color.White,
+                                                containerColor = Color.Transparent
+                                            )
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Fullscreen,
+                                                contentDescription = stringResource(R.string.vd_overlay_a11y_toggle_fullscreen),
+                                                modifier = Modifier.size(18.dp),
+                                                tint = Color.White
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { hide() },
+                                            modifier = Modifier.size(32.dp),
+                                            colors = IconButtonDefaults.iconButtonColors(
+                                                contentColor = Color.White,
+                                                containerColor = Color.Transparent
+                                            )
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Close,
+                                                contentDescription = stringResource(R.string.vd_overlay_a11y_close),
+                                                modifier = Modifier.size(18.dp),
+                                                tint = Color.White
+                                            )
+                                        }
+                                    }
+                                }
+
+                                if (controlsVisible) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.3f))
+                                    )
+                                    Column(
+                                        modifier = Modifier.align(Alignment.Center),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        IconButton(onClick = { snapToEdge() }) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.Minimize,
+                                                contentDescription = stringResource(R.string.vd_overlay_a11y_minimize_to_ball),
+                                                modifier = Modifier.size(32.dp)
+                                            )
+                                        }
+                                        IconButton(onClick = { toggleFullScreen() }) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Fullscreen,
+                                                contentDescription = stringResource(R.string.vd_overlay_a11y_toggle_fullscreen),
+                                                modifier = Modifier.size(32.dp)
+                                            )
+                                        }
+                                        IconButton(onClick = { hide() }) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Close,
+                                                contentDescription = stringResource(R.string.vd_overlay_a11y_close),
+                                                modifier = Modifier.size(32.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -949,7 +1195,11 @@ class VirtualDisplayOverlay private constructor(private val context: Context, pr
                 IconButton(onClick = { onTogglePauseResume(!isPaused) }) {
                     Icon(
                         imageVector = if (isPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
-                        contentDescription = if (isPaused) "Resume automation" else "Pause automation",
+                        contentDescription = if (isPaused) {
+                            stringResource(R.string.vd_overlay_a11y_resume_automation)
+                        } else {
+                            stringResource(R.string.vd_overlay_a11y_pause_automation)
+                        },
                         modifier = Modifier.size(18.dp),
                         tint = MaterialTheme.colorScheme.onSurface
                     )
@@ -957,7 +1207,7 @@ class VirtualDisplayOverlay private constructor(private val context: Context, pr
                 IconButton(onClick = onExit) {
                     Icon(
                         imageVector = Icons.Filled.Close,
-                        contentDescription = "Stop automation",
+                        contentDescription = stringResource(R.string.vd_overlay_a11y_stop_automation),
                         modifier = Modifier.size(18.dp),
                         tint = MaterialTheme.colorScheme.onSurface
                     )
