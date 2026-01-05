@@ -19,6 +19,9 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.AutoMode
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Widgets
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
@@ -97,14 +100,32 @@ fun PackageManagerScreen(
     var showEnvDialog by remember { mutableStateOf(false) }
     var envVariables by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
 
-    val requiredEnvKeys by remember {
+    val requiredEnvByPackage by remember {
         derivedStateOf {
             val packagesMap = availablePackages.value
+            val imported = importedPackages.value.toSet()
 
-            packagesMap.values
-                .flatMap { it.env }
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
+            imported
+                .mapNotNull { packageName -> packagesMap[packageName] }
+                .sortedBy { it.name }
+                .associate { toolPackage ->
+                    val keys = toolPackage.env
+                        .asSequence()
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .distinct()
+                        .sorted()
+                        .toList()
+                    toolPackage.name to keys
+                }
+                .filterValues { keys -> keys.isNotEmpty() }
+        }
+    }
+
+    val requiredEnvKeys by remember {
+        derivedStateOf {
+            requiredEnvByPackage.values
+                .flatten()
                 .toSet()
                 .toList()
                 .sorted()
@@ -665,11 +686,20 @@ fun PackageManagerScreen(
             // Environment Variables Dialog for packages
             if (showEnvDialog) {
                 PackageEnvironmentVariablesDialog(
-                    requiredEnvKeys = requiredEnvKeys,
+                    requiredEnvByPackage = requiredEnvByPackage,
                     currentValues = envVariables,
                     onDismiss = { showEnvDialog = false },
                     onConfirm = { updated ->
-                        envPreferences.setAllEnv(updated)
+                        val merged = envPreferences.getAllEnv().toMutableMap().apply {
+                            updated.forEach { (key, value) ->
+                                if (value.isBlank()) {
+                                    remove(key)
+                                } else {
+                                    this[key] = value
+                                }
+                            }
+                        }
+                        envPreferences.setAllEnv(merged)
                         envVariables = updated
                         showEnvDialog = false
                     }
@@ -679,14 +709,22 @@ fun PackageManagerScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun PackageEnvironmentVariablesDialog(
-    requiredEnvKeys: List<String>,
+    requiredEnvByPackage: Map<String, List<String>>,
     currentValues: Map<String, String>,
     onDismiss: () -> Unit,
     onConfirm: (Map<String, String>) -> Unit
 ) {
+    val requiredEnvKeys = remember(requiredEnvByPackage) {
+        requiredEnvByPackage.values
+            .flatten()
+            .toSet()
+            .toList()
+            .sorted()
+    }
+
     val editableValuesState =
         remember(requiredEnvKeys, currentValues) {
             mutableStateOf(
@@ -700,27 +738,61 @@ private fun PackageEnvironmentVariablesDialog(
         title = { Text(text = "配置环境变量") },
         text = {
             if (requiredEnvKeys.isEmpty()) {
-                Text(text = "当前已导入的工具包没有声明需要的环境变量。")
+                Text(
+                    text = "当前已导入的工具包没有声明需要的环境变量。",
+                    style = MaterialTheme.typography.bodyMedium
+                )
             } else {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "以下环境变量由当前已导入的工具包声明，请为每一项填写值：",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 400.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    requiredEnvByPackage.forEach { (packageName, keys) ->
+                        stickyHeader(key = "header:$packageName") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    modifier = Modifier.size(24.dp),
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.primaryContainer
+                                ) {
+                                    Box(
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = packageName.first().uppercaseChar().toString(),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = packageName,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
 
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 320.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(requiredEnvKeys) { key ->
+                        items(
+                            items = keys,
+                            key = { key -> "$packageName:$key" }
+                        ) { key ->
                             Column(modifier = Modifier.fillMaxWidth()) {
                                 Text(
                                     text = key,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 OutlinedTextField(
@@ -732,7 +804,15 @@ private fun PackageEnvironmentVariablesDialog(
                                             }
                                     },
                                     singleLine = true,
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier.fillMaxWidth(),
+                                    placeholder = {
+                                        Text(
+                                            text = "输入值",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    },
+                                    shape = RoundedCornerShape(6.dp),
+                                    textStyle = MaterialTheme.typography.bodySmall
                                 )
                             }
                         }
@@ -741,11 +821,7 @@ private fun PackageEnvironmentVariablesDialog(
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = {
-                    onConfirm(editableValues)
-                }
-            ) {
+            TextButton(onClick = { onConfirm(editableValues) }) {
                 Text(text = "保存")
             }
         },

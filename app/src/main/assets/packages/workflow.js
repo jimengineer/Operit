@@ -2,30 +2,8 @@
 {
   name: "workflow"
   description: {
-    zh: '''
-工作流管理工具，提供工作流的创建、查询、更新、删除和触发执行能力。
-
-本工具的核心目标：让 AI 能够“自主创建/修改工作流”，并正确理解：
-- 节点类型（trigger/execute/condition/logic/extract）
-- 触发节点类型（manual/schedule/tasker/intent）及其配置
-- 参数引用（ParameterValue：静态值 vs 引用其他节点输出）
-- 分支连线 condition 的语义（true/false/regex）
-
-重要：create_workflow/update_workflow 的 nodes/connections 参数类型是 string（JSON 数组字符串）。
-本示例封装允许你直接传对象数组，封装层会自动 JSON.stringify。
-'''
-    en: '''
-Workflow management tools that support creating, querying, updating, deleting, and triggering workflow execution.
-
-The core goal of this package is to enable the AI to autonomously create/modify workflows and correctly understand:
-- Node types (trigger/execute/condition/logic/extract)
-- Trigger node types (manual/schedule/tasker/intent) and their configurations
-- Parameter references (ParameterValue: static values vs. references to another node output)
-- The meaning of connection "condition" (true/false/regex)
-
-Important: for create_workflow/update_workflow, the nodes/connections parameters are strings (JSON array strings).
-This example wrapper lets you pass object arrays directly; it will JSON.stringify automatically.
-'''
+    zh: '''工作流管理工具：用于创建、查询、更新、删除工作流，并可触发执行。'''
+    en: '''Workflow management tools for creating, querying, updating, deleting workflows, and triggering execution.'''
   }
 
   enabledByDefault: true
@@ -36,6 +14,15 @@ This example wrapper lets you pass object arrays directly; it will JSON.stringif
       description: {
         zh: '''
 工作流工具使用建议（给 AI）：
+
+- 核心概念（请优先对齐这些语义）：
+  - 节点类型：trigger/execute/condition/logic/extract
+  - 触发节点类型：manual/schedule/tasker/intent
+  - 参数引用（ParameterValue）：静态值 vs 引用其他节点输出
+  - 分支连线 condition 的语义：true/false/regex
+
+- 重要：create_workflow/update_workflow 的 nodes/connections 参数底层类型是 string（JSON 数组字符串）。
+  - 本示例封装允许你直接传对象数组，封装层会自动 JSON.stringify。
 
 - 推荐流程：
   1) 先 get_all_workflows 找到候选 workflow_id。
@@ -85,6 +72,15 @@ This example wrapper lets you pass object arrays directly; it will JSON.stringif
 '''
         en: '''
 Workflow tool usage advice (for the AI):
+
+- Core concepts (align your reasoning with these semantics):
+  - Node types: trigger/execute/condition/logic/extract
+  - Trigger node types: manual/schedule/tasker/intent
+  - Parameter references (ParameterValue): static values vs references to another node output
+  - Connection "condition" meaning: true/false/regex
+
+- Important: in create_workflow/update_workflow, nodes/connections are strings (JSON array strings) at the API layer.
+  - This example wrapper lets you pass object arrays directly; it will JSON.stringify automatically.
 
 - Recommended flow:
   1) Call get_all_workflows to find the candidate workflow_id.
