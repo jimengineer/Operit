@@ -508,8 +508,11 @@ object AIMessageManager {
                 )
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) {
+                throw e
+            }
             AppLogger.e(TAG, "AI生成总结过程中发生异常", e)
-            null
+            throw e
         }
     }
 

@@ -456,7 +456,17 @@ class LinuxFileSystemTools(context: Context) : StandardFileSystemTools(context) 
                 ""
             }
 
-            val contentWithLineNumbers = addLineNumbers(partContent, startLine - 1, totalLines)
+            val maxFileSizeBytes = apiPreferences.getMaxFileSizeBytes()
+            var truncatedPartContent = partContent
+            val isTruncated = truncatedPartContent.length > maxFileSizeBytes
+            if (isTruncated) {
+                truncatedPartContent = truncatedPartContent.substring(0, maxFileSizeBytes)
+            }
+
+            var contentWithLineNumbers = addLineNumbers(truncatedPartContent, startLine - 1, totalLines)
+            if (isTruncated) {
+                contentWithLineNumbers += "\n\n... (file content truncated) ..."
+            }
 
             ToolResult(
                 toolName = tool.name,

@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,12 +40,14 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFontFamilyResolver
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -62,7 +65,10 @@ import kotlin.math.floor
 
 private const val TAG = "CanvasMarkdownRenderer"
 private const val MAX_CANVAS_HEIGHT_PX = 250_000f
+private const val MAX_COMPOSE_CONSTRAINT_HEIGHT_PX = 262_000f
 private const val TYPEWRITER_WINDOW_MS = 200
+
+private const val FALLBACK_MAX_TEXT_CHARS = 20_000
 
 /**
  * 通用性能优化 Modifier：仅在组件进入屏幕可见区域时才进行绘制。
@@ -635,7 +641,9 @@ private fun UnifiedCanvasRenderer(
     }
 
     BoxWithConstraints(modifier = modifier) {
-        val availableWidthPx = with(density) { maxWidth.toPx() }.toInt()
+        val localDensity = LocalDensity.current
+        val availableWidthPx = with(localDensity) { maxWidth.toPx() }.toInt()
+        if (availableWidthPx <= 0) return@BoxWithConstraints
 
         val enableTypewriter = !nodeKey.startsWith("static-node-") && isLastNode && (node.content.isNotEmpty() || node.children.isNotEmpty()) &&
                 (node.type == MarkdownProcessorType.PLAIN_TEXT ||
@@ -660,7 +668,7 @@ private fun UnifiedCanvasRenderer(
                 titleSmallSize = titleSmallSize,
                 normalTypeface = normalTypeface,
                 boldTypeface = boldTypeface,
-                density = density,
+                density = localDensity,
                 availableWidthPx = availableWidthPx,
                 isLastNode = isLastNode
             )
@@ -730,193 +738,213 @@ private fun UnifiedCanvasRenderer(
         val accessibleText = remember(layoutResult.instructions) {
             extractAccessibleText(layoutResult.instructions)
         }
-        val clampedHeightDp = with(density) {
-            layoutResult.height.coerceIn(0f, MAX_CANVAS_HEIGHT_PX).toDp()
+        val safeAccessibleText = remember(accessibleText) {
+            if (accessibleText.length > FALLBACK_MAX_TEXT_CHARS) {
+                accessibleText.substring(0, FALLBACK_MAX_TEXT_CHARS)
+            } else {
+                accessibleText
+            }
+        }
+        val maxHeightPx = minOf(MAX_CANVAS_HEIGHT_PX, MAX_COMPOSE_CONSTRAINT_HEIGHT_PX)
+        val clampedHeightDp = with(localDensity) {
+            layoutResult.height.coerceIn(0f, maxHeightPx).toDp()
         }
         
         // 使用单个 Canvas 绘制所有内容
-        Canvas(
-            modifier = (if (fillMaxWidth) {
-                Modifier.fillMaxWidth()
-            } else {
-                // bubble模式：使用实际宽度，如果宽度为0则wrapContent
-                if (layoutResult.actualWidth > 0f) {
-                    Modifier.width(with(density) { layoutResult.actualWidth.toDp() })
+        SafeMeasureOrFallback(
+            fallback = {
+                Text(
+                    text = safeAccessibleText,
+                    color = textColor,
+                    maxLines = 200,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        ) {
+            Canvas(
+                modifier = (if (fillMaxWidth) {
+                    Modifier.fillMaxWidth()
                 } else {
-                    Modifier
-                }
-            })
-                .height(clampedHeightDp)
-                .semantics {
-                    contentDescription = accessibleText
-                }
-                .pointerInput(layoutResult.instructions, onLinkClick) {
-                    // 使用 awaitEachGesture 来精确控制事件消费
-                    awaitEachGesture {
-                        val down = awaitPointerEvent(PointerEventPass.Initial).changes.first()
-                        val downTime = System.currentTimeMillis()
-                        val downPosition = down.position
-                        
-                        // 等待手指抬起
-                        val up = awaitPointerEvent(PointerEventPass.Initial).changes.first()
-                        val upTime = System.currentTimeMillis()
-                        val upPosition = up.position
-                        
-                        // 检查是否是点击（而非长按或拖动）
-                        val isTap = (upTime - downTime) < 500 && // 时间小于500ms
-                                    (upPosition - downPosition).getDistance() < 10f // 移动距离小于10px
-                        
-                        if (isTap) {
-                            // 检查是否点击到了链接
-                            var clickedLink = false
-                            layoutResult.instructions.forEach { instruction ->
-                                if (instruction is DrawInstruction.TextLayout) {
-                                    val layout = instruction.layout
-                                    val text = instruction.text
-                                    if (text is Spanned) {
-                                        val bounds = android.graphics.RectF(
-                                            instruction.x,
-                                            instruction.y,
-                                            instruction.x + layout.width,
-                                            instruction.y + layout.height
-                                        )
-                                        if (bounds.contains(upPosition.x, upPosition.y)) {
-                                            val relativeX = upPosition.x - instruction.x
-                                            val relativeY = upPosition.y - instruction.y
-                                            val line = layout.getLineForVertical(relativeY.toInt())
-                                            val lineOffset = layout.getOffsetForHorizontal(line, relativeX)
+                    // bubble模式：使用实际宽度，如果宽度为0则wrapContent
+                    if (layoutResult.actualWidth > 0f) {
+                        Modifier.width(with(localDensity) { layoutResult.actualWidth.toDp() })
+                    } else {
+                        Modifier
+                    }
+                })
+                    .height(clampedHeightDp)
+                    .semantics {
+                        contentDescription = safeAccessibleText
+                    }
+                    .pointerInput(layoutResult.instructions, onLinkClick) {
+                        // 使用 awaitEachGesture 来精确控制事件消费
+                        awaitEachGesture {
+                            val down = awaitPointerEvent(PointerEventPass.Initial).changes.first()
+                            val downTime = System.currentTimeMillis()
+                            val downPosition = down.position
+                            
+                            // 等待手指抬起
+                            val up = awaitPointerEvent(PointerEventPass.Initial).changes.first()
+                            val upTime = System.currentTimeMillis()
+                            val upPosition = up.position
+                            
+                            // 检查是否是点击（而非长按或拖动）
+                            val isTap = (upTime - downTime) < 500 && // 时间小于500ms
+                                        (upPosition - downPosition).getDistance() < 10f // 移动距离小于10px
+                            
+                            if (isTap) {
+                                // 检查是否点击到了链接
+                                var clickedLink = false
+                                layoutResult.instructions.forEach { instruction ->
+                                    if (instruction is DrawInstruction.TextLayout) {
+                                        val layout = instruction.layout
+                                        val text = instruction.text
+                                        if (text is Spanned) {
+                                            val bounds = android.graphics.RectF(
+                                                instruction.x,
+                                                instruction.y,
+                                                instruction.x + layout.width,
+                                                instruction.y + layout.height
+                                            )
+                                            if (bounds.contains(upPosition.x, upPosition.y)) {
+                                                val relativeX = upPosition.x - instruction.x
+                                                val relativeY = upPosition.y - instruction.y
+                                                val line = layout.getLineForVertical(relativeY.toInt())
+                                                val lineOffset = layout.getOffsetForHorizontal(line, relativeX)
 
-                                            val spans = text.getSpans(lineOffset, lineOffset, URLSpan::class.java)
-                                            spans.firstOrNull()?.let { span ->
-                                                onLinkClick?.invoke(span.url)
-                                                clickedLink = true
+                                                val spans = text.getSpans(lineOffset, lineOffset, URLSpan::class.java)
+                                                spans.firstOrNull()?.let { span ->
+                                                    onLinkClick?.invoke(span.url)
+                                                    clickedLink = true
+                                                }
                                             }
                                         }
                                     }
                                 }
+                                
+                                // 只有点击到链接时才消费事件
+                                if (clickedLink) {
+                                    up.consume()
+                                }
                             }
-                            
-                            // 只有点击到链接时才消费事件
-                            if (clickedLink) {
-                                up.consume()
-                            }
+                            // 如果不是点击或没有点击到链接，不消费事件，让它传递到外层
                         }
-                        // 如果不是点击或没有点击到链接，不消费事件，让它传递到外层
                     }
-                }
-        ) {
-            drawIntoCanvas { canvas ->
-                // 获取可见区域（屏幕内区域）
-                val clipBounds = android.graphics.Rect()
-                canvas.nativeCanvas.getClipBounds(clipBounds)
+            ) {
+                drawIntoCanvas { canvas ->
+                    // 获取可见区域（屏幕内区域）
+                    val clipBounds = android.graphics.Rect()
+                    canvas.nativeCanvas.getClipBounds(clipBounds)
 
-                // 只绘制在可见区域内的指令
-                layoutResult.instructions.forEach { instruction ->
-                    when (instruction) {
-                        is DrawInstruction.Text -> {
-                            // 判断文本是否在可见区域内
-                            val textTop = instruction.y - instruction.paint.textSize
-                            val textBottom = instruction.y + instruction.paint.descent()
+                    // 只绘制在可见区域内的指令
+                    layoutResult.instructions.forEach { instruction ->
+                        when (instruction) {
+                            is DrawInstruction.Text -> {
+                                // 判断文本是否在可见区域内
+                                val textTop = instruction.y - instruction.paint.textSize
+                                val textBottom = instruction.y + instruction.paint.descent()
 
-                            if (textBottom >= clipBounds.top && textTop <= clipBounds.bottom) {
-                                canvas.nativeCanvas.drawText(
-                                    instruction.text,
-                                    instruction.x,
-                                    instruction.y,
-                                    instruction.paint
-                                )
+                                if (textBottom >= clipBounds.top && textTop <= clipBounds.bottom) {
+                                    canvas.nativeCanvas.drawText(
+                                        instruction.text,
+                                        instruction.x,
+                                        instruction.y,
+                                        instruction.paint
+                                    )
+                                }
                             }
-                        }
-                        is DrawInstruction.Line -> {
-                            // 判断线条是否在可见区域内
-                            val lineTop = minOf(instruction.startY, instruction.endY)
-                            val lineBottom = maxOf(instruction.startY, instruction.endY)
+                            is DrawInstruction.Line -> {
+                                // 判断线条是否在可见区域内
+                                val lineTop = minOf(instruction.startY, instruction.endY)
+                                val lineBottom = maxOf(instruction.startY, instruction.endY)
 
-                            if (lineBottom >= clipBounds.top && lineTop <= clipBounds.bottom) {
-                                canvas.nativeCanvas.drawLine(
-                                    instruction.startX,
-                                    instruction.startY,
-                                    instruction.endX,
-                                    instruction.endY,
-                                    instruction.paint
-                                )
+                                if (lineBottom >= clipBounds.top && lineTop <= clipBounds.bottom) {
+                                    canvas.nativeCanvas.drawLine(
+                                        instruction.startX,
+                                        instruction.startY,
+                                        instruction.endX,
+                                        instruction.endY,
+                                        instruction.paint
+                                    )
+                                }
                             }
-                        }
-                        is DrawInstruction.TextLayout -> {
-                            // 使用 StaticLayout 绘制（自动换行）
-                            val layoutTop = instruction.y
-                            val layoutBottom = instruction.y + instruction.layout.height
+                            is DrawInstruction.TextLayout -> {
+                                // 使用 StaticLayout 绘制（自动换行）
+                                val layoutTop = instruction.y
+                                val layoutBottom = instruction.y + instruction.layout.height
 
-                            if (layoutBottom >= clipBounds.top && layoutTop <= clipBounds.bottom) {
-                                canvas.nativeCanvas.save()
-                                canvas.nativeCanvas.translate(instruction.x, instruction.y)
+                                if (layoutBottom >= clipBounds.top && layoutTop <= clipBounds.bottom) {
+                                    canvas.nativeCanvas.save()
+                                    canvas.nativeCanvas.translate(instruction.x, instruction.y)
 
-                                if (enableTypewriter && revealInstruction === instruction && targetLength > 0 && baseLen < targetLength) {
-                                    val layout = instruction.layout
+                                    if (enableTypewriter && revealInstruction === instruction && targetLength > 0 && baseLen < targetLength) {
+                                        val layout = instruction.layout
 
-                                    val offsetForLine = baseLen.coerceIn(0, (targetLength - 1).coerceAtLeast(0))
-                                    val line = layout.getLineForOffset(offsetForLine)
-                                    val lineTopPx = layout.getLineTop(line).toFloat()
-                                    val lineBottomPx = layout.getLineBottom(line).toFloat()
+                                        val offsetForLine = baseLen.coerceIn(0, (targetLength - 1).coerceAtLeast(0))
+                                        val line = layout.getLineForOffset(offsetForLine)
+                                        val lineTopPx = layout.getLineTop(line).toFloat()
+                                        val lineBottomPx = layout.getLineBottom(line).toFloat()
 
-                                    val safeBaseLen = baseLen.coerceIn(0, targetLength)
-                                    val safeNextLen = (baseLen + 1).coerceAtMost(targetLength)
-                                    val x0 = layout.getPrimaryHorizontal(safeBaseLen)
-                                    
-                                    // 检查下一个字符是否换行
-                                    val lineOfNext = if (safeNextLen < layout.text.length) layout.getLineForOffset(safeNextLen) else line
-                                    val x1 = if (lineOfNext != line) {
-                                        // 如果换行了，说明当前字符是该行的最后一个字符（可能是\n，或者是被wrap的字符）
-                                        // 这种情况下 getPrimaryHorizontal(safeNextLen) 会返回下一行的坐标（通常是0），导致计算出的 charWidth 巨大且不仅确
-                                        // 我们需要手动测量这个字符的宽度，并加在 x0 上 (假设 LTR)
-                                        // 注意：如果是 RTL，逻辑需要反过来，这里简单处理常规情况，更严谨可以使用 layout.getParagraphDirection
-                                        val charWidthMeasured = layout.paint.measureText(layout.text, safeBaseLen, safeNextLen)
-                                        if (layout.getParagraphDirection(line) == android.text.Layout.DIR_RIGHT_TO_LEFT) {
-                                            x0 - charWidthMeasured
+                                        val safeBaseLen = baseLen.coerceIn(0, targetLength)
+                                        val safeNextLen = (baseLen + 1).coerceAtMost(targetLength)
+                                        val x0 = layout.getPrimaryHorizontal(safeBaseLen)
+                                        
+                                        // 检查下一个字符是否换行
+                                        val lineOfNext = if (safeNextLen < layout.text.length) layout.getLineForOffset(safeNextLen) else line
+                                        val x1 = if (lineOfNext != line) {
+                                            // 如果换行了，说明当前字符是该行的最后一个字符（可能是\n，或者是被wrap的字符）
+                                            // 这种情况下 getPrimaryHorizontal(safeNextLen) 会返回下一行的坐标（通常是0），导致计算出的 charWidth 巨大且不仅确
+                                            // 我们需要手动测量这个字符的宽度，并加在 x0 上 (假设 LTR)
+                                            // 注意：如果是 RTL，逻辑需要反过来，这里简单处理常规情况，更严谨可以使用 layout.getParagraphDirection
+                                            val charWidthMeasured = layout.paint.measureText(layout.text, safeBaseLen, safeNextLen)
+                                            if (layout.getParagraphDirection(line) == android.text.Layout.DIR_RIGHT_TO_LEFT) {
+                                                x0 - charWidthMeasured
+                                            } else {
+                                                x0 + charWidthMeasured
+                                            }
                                         } else {
-                                            x0 + charWidthMeasured
+                                            layout.getPrimaryHorizontal(safeNextLen)
                                         }
-                                    } else {
-                                        layout.getPrimaryHorizontal(safeNextLen)
-                                    }
 
-                                    val charMinX = minOf(x0, x1)
-                                    val charMaxX = maxOf(x0, x1)
-                                    val charWidth = (charMaxX - charMinX).coerceAtLeast(0f)
-                                    // 修正闪烁问题：
-                                    // 之前对 charWidth <= 0.01f 的处理（直接显示整行）会导致在换行处如果有零宽字符（如某些空格或换行符处理），
-                                    // 会瞬间显示出该行后续的文字，产生闪烁。
-                                    // 现在统一使用分段绘制逻辑，并仅在字符宽度有效时才绘制淡入部分。
+                                        val charMinX = minOf(x0, x1)
+                                        val charMaxX = maxOf(x0, x1)
+                                        val charWidth = (charMaxX - charMinX).coerceAtLeast(0f)
+                                        // 修正闪烁问题：
+                                        // 之前对 charWidth <= 0.01f 的处理（直接显示整行）会导致在换行处如果有零宽字符（如某些空格或换行符处理），
+                                        // 会瞬间显示出该行后续的文字，产生闪烁。
+                                        // 现在统一使用分段绘制逻辑，并仅在字符宽度有效时才绘制淡入部分。
 
-                                    val visibleRight = (charMinX + charWidth * partial).coerceIn(charMinX, charMaxX)
+                                        val visibleRight = (charMinX + charWidth * partial).coerceIn(charMinX, charMaxX)
 
-                                    // 1. 绘制当前行之前的所有行
-                                    canvas.nativeCanvas.save()
-                                    canvas.nativeCanvas.clipRect(0f, 0f, layout.width.toFloat(), lineTopPx)
-                                    layout.draw(canvas.nativeCanvas)
-                                    canvas.nativeCanvas.restore()
-
-                                    // 2. 绘制当前行，直到当前正在显示的字符之前
-                                    canvas.nativeCanvas.save()
-                                    canvas.nativeCanvas.clipRect(0f, lineTopPx, charMinX, lineBottomPx)
-                                    layout.draw(canvas.nativeCanvas)
-                                    canvas.nativeCanvas.restore()
-
-                                    // 3. 绘制当前正在显示的字符（带淡入效果）
-                                    if (charWidth > 0.01f) {
-                                        val alphaInt = (partial * 255f).toInt().coerceIn(0, 255)
+                                        // 1. 绘制当前行之前的所有行
                                         canvas.nativeCanvas.save()
-                                        canvas.nativeCanvas.clipRect(charMinX, lineTopPx, visibleRight, lineBottomPx)
-                                        // 注意：saveLayerAlpha 在某些情况下可能会对其包含的内容做混合，如果不需要可以简化
-                                        canvas.nativeCanvas.saveLayerAlpha(charMinX, lineTopPx, visibleRight, lineBottomPx, alphaInt)
+                                        canvas.nativeCanvas.clipRect(0f, 0f, layout.width.toFloat(), lineTopPx)
                                         layout.draw(canvas.nativeCanvas)
                                         canvas.nativeCanvas.restore()
+
+                                        // 2. 绘制当前行，直到当前正在显示的字符之前
+                                        canvas.nativeCanvas.save()
+                                        canvas.nativeCanvas.clipRect(0f, lineTopPx, charMinX, lineBottomPx)
+                                        layout.draw(canvas.nativeCanvas)
                                         canvas.nativeCanvas.restore()
+
+                                        // 3. 绘制当前正在显示的字符（带淡入效果）
+                                        if (charWidth > 0.01f) {
+                                            val alphaInt = (partial * 255f).toInt().coerceIn(0, 255)
+                                            canvas.nativeCanvas.save()
+                                            canvas.nativeCanvas.clipRect(charMinX, lineTopPx, visibleRight, lineBottomPx)
+                                            // 注意：saveLayerAlpha 在某些情况下可能会对其包含的内容做混合，如果不需要可以简化
+                                            canvas.nativeCanvas.saveLayerAlpha(charMinX, lineTopPx, visibleRight, lineBottomPx, alphaInt)
+                                            layout.draw(canvas.nativeCanvas)
+                                            canvas.nativeCanvas.restore()
+                                            canvas.nativeCanvas.restore()
+                                        }
+                                    } else {
+                                        instruction.layout.draw(canvas.nativeCanvas)
                                     }
-                                } else {
-                                    instruction.layout.draw(canvas.nativeCanvas)
+                                    canvas.nativeCanvas.restore()
                                 }
-                                canvas.nativeCanvas.restore()
                             }
                         }
                     }
@@ -1215,7 +1243,6 @@ private fun calculateLayout(
     return LayoutResult(currentY, maxWidth, instructions)
 }
 
-
 /**
  * 从 MarkdownNode 的子节点构建 SpannableStringBuilder
  */
@@ -1319,7 +1346,6 @@ private fun buildSpannableFromChildren(
     return builder
 }
 
-
 /**
  * 单个文本的 Canvas 渲染器（用于引用块等简单场景）
  */
@@ -1342,9 +1368,11 @@ private fun SingleTextCanvas(
     }
 
     BoxWithConstraints(modifier = modifier) {
-        val availableWidthPx = with(density) { maxWidth.toPx() }.toInt()
-        if (availableWidthPx <= 0) return@BoxWithConstraints
-        val textSizePx = with(density) { fontSize.toPx() }
+        val localDensity = LocalDensity.current
+        val availableWidthPxRaw = with(localDensity) { maxWidth.toPx() }.toInt()
+        if (availableWidthPxRaw <= 0) return@BoxWithConstraints
+        val availableWidthPx = safeLayoutWidth(availableWidthPxRaw)
+        val textSizePx = with(localDensity) { fontSize.toPx() }
         
         val textPaint = remember(textColor, textSizePx, typeface) {
             PaintCache.getTextPaint(textColor, textSizePx, typeface)
@@ -1355,33 +1383,84 @@ private fun SingleTextCanvas(
         }
         
         val totalHeight = layout.height.toFloat()
-        val clampedHeightDp = with(density) {
-            totalHeight.coerceIn(0f, MAX_CANVAS_HEIGHT_PX).toDp()
+        val maxHeightPx = minOf(MAX_CANVAS_HEIGHT_PX, MAX_COMPOSE_CONSTRAINT_HEIGHT_PX)
+        val clampedHeightDp = with(localDensity) {
+            totalHeight.coerceIn(0f, maxHeightPx).toDp()
         }
-        
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(clampedHeightDp)
-                .semantics {
-                    contentDescription = text
-                }
+
+        val safeText = remember(text) {
+            if (text.length > FALLBACK_MAX_TEXT_CHARS) {
+                text.substring(0, FALLBACK_MAX_TEXT_CHARS)
+            } else {
+                text
+            }
+        }
+
+        SafeMeasureOrFallback(
+            fallback = {
+                Text(
+                    text = safeText,
+                    color = textColor,
+                    maxLines = 200,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         ) {
-            drawIntoCanvas { canvas ->
-                // 获取可见区域
-                val clipBounds = android.graphics.Rect()
-                canvas.nativeCanvas.getClipBounds(clipBounds)
-                
-                // 判断是否在可见区域内
-                if (totalHeight >= clipBounds.top && 0f <= clipBounds.bottom) {
-                    layout.draw(canvas.nativeCanvas)
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(clampedHeightDp)
+                    .semantics {
+                        contentDescription = text
+                    }
+            ) {
+                drawIntoCanvas { canvas ->
+                    // 获取可见区域
+                    val clipBounds = android.graphics.Rect()
+                    canvas.nativeCanvas.getClipBounds(clipBounds)
+                    
+                    // 判断是否在可见区域内
+                    if (totalHeight >= clipBounds.top && 0f <= clipBounds.bottom) {
+                        layout.draw(canvas.nativeCanvas)
+                    }
                 }
             }
         }
     }
 }
 
-/** 判断标题级别 */
+@Composable
+private fun SafeMeasureOrFallback(
+    fallback: @Composable () -> Unit,
+    content: @Composable () -> Unit
+) {
+    Layout(
+        content = {
+            Box { content() }
+            Box { fallback() }
+        }
+    ) { measurables, constraints ->
+        val primary = measurables[0]
+        val fallbackMeasurable = measurables[1]
+        try {
+            val placeable = primary.measure(constraints)
+            layout(placeable.width, placeable.height) {
+                placeable.placeRelative(0, 0)
+            }
+        } catch (t: Throwable) {
+            AppLogger.e(TAG, "Markdown renderer measure failed, fallback to text", t)
+            val placeable = fallbackMeasurable.measure(constraints)
+            layout(placeable.width, placeable.height) {
+                placeable.placeRelative(0, 0)
+            }
+        }
+    }
+}
+
+/**
+ * 判断标题级别
+ */
 private fun determineHeaderLevel(content: String): Int {
     val headerPrefix = content.takeWhile { it == '#' }
     return headerPrefix.length.coerceIn(1, 6)

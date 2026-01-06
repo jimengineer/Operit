@@ -711,8 +711,17 @@ open class DebuggerFileSystemTools(context: Context) : AccessibilityFileSystemTo
                 )
             }
 
-            val content = partResult.stdout
-            val contentWithLineNumbers = addLineNumbers(content, startLine, totalLines)
+            val maxFileSizeBytes = apiPreferences.getMaxFileSizeBytes()
+            var content = partResult.stdout
+            val isTruncated = content.length > maxFileSizeBytes
+            if (isTruncated) {
+                content = content.substring(0, maxFileSizeBytes)
+            }
+
+            var contentWithLineNumbers = addLineNumbers(content, startLine, totalLines)
+            if (isTruncated) {
+                contentWithLineNumbers += "\n\n... (file content truncated) ..."
+            }
 
             ToolResult(
                     toolName = tool.name,

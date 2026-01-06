@@ -1404,6 +1404,7 @@ open class StandardFileSystemTools(protected val context: Context) {
         return withContext(Dispatchers.IO) {
             try {
                 val file = File(path)
+                val maxFileSizeBytes = apiPreferences.getMaxFileSizeBytes()
 
                 if (!file.exists() || !file.isFile) {
                     return@withContext ToolResult(
@@ -1457,7 +1458,16 @@ open class StandardFileSystemTools(protected val context: Context) {
                 }
 
                 // 4. 封装返回结果
-                val contentWithLineNumbers = addLineNumbers(partContent, startIndex, totalLines)
+                var truncatedPartContent = partContent
+                val isTruncated = truncatedPartContent.length > maxFileSizeBytes
+                if (isTruncated) {
+                    truncatedPartContent = truncatedPartContent.substring(0, maxFileSizeBytes)
+                }
+
+                var contentWithLineNumbers = addLineNumbers(truncatedPartContent, startIndex, totalLines)
+                if (isTruncated) {
+                    contentWithLineNumbers += "\n\n... (file content truncated) ..."
+                }
 
                 ToolResult(
                     toolName = tool.name,
