@@ -1875,6 +1875,7 @@
     <string name="speech_services_tts_type_simple">系统 TTS (简单)</string>
     <string name="speech_services_tts_type_http">HTTP API (远程)</string>
     <string name="speech_services_tts_type_siliconflow">硅基流动 TTS</string>
+    <string name="speech_services_tts_type_openai">OpenAI 语音</string>
     
     <!-- STT Service Types -->
     <string name="speech_services_stt_type_sherpa">Sherpa NCNN (本地)</string>
@@ -1924,7 +1925,22 @@
     <string name="speech_services_siliconflow_voice_id">音色 ID</string>
     <string name="speech_services_siliconflow_voice_id_placeholder">例如：charles 或 speech:kll:32w2b3aj5b:orvmnmpjkqchqalegwvi</string>
     <string name="speech_services_siliconflow_voice_id_hint">预设音色（alex/benjamin/charles等）或自定义音色（speech:开头的URI）</string>
-    
+
+    <string name="speech_services_openai_config">OpenAI 语音 配置</string>
+    <string name="speech_services_openai_url">URL</string>
+    <string name="speech_services_openai_url_placeholder">例如：https://api.example.com/v1/audio/speech</string>
+    <string name="speech_services_openai_url_hint">需要填写完整接口地址，必须包含 /v1/audio/speech（不提供默认值）</string>
+    <string name="speech_services_openai_api_key">API 密钥</string>
+    <string name="speech_services_openai_api_key_placeholder">例如：sk-xxxxxx</string>
+    <string name="speech_services_openai_model">model</string>
+    <string name="speech_services_openai_model_placeholder">例如：tts-1</string>
+    <string name="speech_services_openai_voice_settings">音色设置</string>
+    <string name="speech_services_openai_voice_select">选择预设音色</string>
+    <string name="speech_services_openai_voice_select_icon">选择音色</string>
+    <string name="speech_services_openai_voice_custom">自定义音色</string>
+    <string name="speech_services_openai_voice_id">voice</string>
+    <string name="speech_services_openai_voice_id_placeholder">例如：alloy</string>
+
     <!-- STT Configuration -->
     <string name="speech_services_stt_info">支持本地 Sherpa-NCNN 和 Sherpa-MNN 引擎。</string>
     

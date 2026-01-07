@@ -15,6 +15,7 @@ object VoiceServiceFactory {
         HTTP_TTS,
         /** 硅基流动TTS服务 */
         SILICONFLOW_TTS,
+        OPENAI_TTS,
     }
 
     /**
@@ -46,6 +47,16 @@ object VoiceServiceFactory {
                         apiKey = httpConfig.apiKey,
                         initialVoiceId = httpConfig.voiceId,
                         initialModelName = httpConfig.modelName
+                    )
+                }
+                VoiceServiceType.OPENAI_TTS -> {
+                    val httpConfig = prefs.ttsHttpConfigFlow.first()
+                    OpenAIVoiceProvider(
+                        context = context,
+                        endpointUrl = httpConfig.urlTemplate,
+                        apiKey = httpConfig.apiKey,
+                        model = httpConfig.modelName,
+                        initialVoiceId = httpConfig.voiceId
                     )
                 }
             }

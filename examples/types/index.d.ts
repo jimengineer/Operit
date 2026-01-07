@@ -138,6 +138,8 @@ declare global {
         export type Connection = WorkflowType.Connection;
         export type NodeInput = WorkflowType.NodeInput;
         export type ConnectionInput = WorkflowType.ConnectionInput;
+        export type ConnectionConditionKeyword = WorkflowType.ConnectionConditionKeyword;
+        export type ConnectionCondition = WorkflowType.ConnectionCondition;
         export type ParameterValueInput = WorkflowType.ParameterValueInput;
         export type Info = WorkflowType.Info;
         export type Detail = WorkflowType.Detail;

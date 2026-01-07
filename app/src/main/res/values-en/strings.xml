@@ -1837,6 +1837,7 @@
     <string name="speech_services_tts_type_simple">System TTS (Simple)</string>
     <string name="speech_services_tts_type_http">HTTP API (Remote)</string>
     <string name="speech_services_tts_type_siliconflow">SiliconFlow TTS</string>
+    <string name="speech_services_tts_type_openai">OpenAI Voice</string>
     
     <!-- STT Service Types -->
     <string name="speech_services_stt_type_sherpa">Sherpa NCNN (Local)</string>
@@ -1886,7 +1887,22 @@
     <string name="speech_services_siliconflow_voice_id">Voice ID</string>
     <string name="speech_services_siliconflow_voice_id_placeholder">e.g.: charles or speech:kll:32w2b3aj5b:orvmnmpjkqchqalegwvi</string>
     <string name="speech_services_siliconflow_voice_id_hint">Enter voice name (e.g. charles) or full voice ID (e.g. custom voice starting with speech:)</string>
-    
+
+    <string name="speech_services_openai_config">OpenAI Voice Configuration</string>
+    <string name="speech_services_openai_url">URL</string>
+    <string name="speech_services_openai_url_placeholder">e.g.: https://api.example.com/v1/audio/speech</string>
+    <string name="speech_services_openai_url_hint">You must enter the full endpoint URL, including /v1/audio/speech (no default is provided)</string>
+    <string name="speech_services_openai_api_key">API Key</string>
+    <string name="speech_services_openai_api_key_placeholder">e.g.: sk-xxxxxx</string>
+    <string name="speech_services_openai_model">model</string>
+    <string name="speech_services_openai_model_placeholder">e.g.: tts-1</string>
+    <string name="speech_services_openai_voice_settings">Voice Settings</string>
+    <string name="speech_services_openai_voice_select">Select preset voice</string>
+    <string name="speech_services_openai_voice_select_icon">Select voice</string>
+    <string name="speech_services_openai_voice_custom">Custom voice</string>
+    <string name="speech_services_openai_voice_id">voice</string>
+    <string name="speech_services_openai_voice_id_placeholder">e.g.: alloy</string>
+
     <!-- STT Configuration -->
     <string name="speech_services_stt_info">Supports local Sherpa-NCNN and Sherpa-MNN engines.</string>
     

@@ -847,6 +847,24 @@ export interface ExtractNode {
 export type WorkflowNode = TriggerNode | ExecuteNode | ConditionNode | LogicNode | ExtractNode;
 
 /**
+ * 工作流节点连接条件关键字
+ */
+export type WorkflowConnectionConditionKeyword =
+    | 'true'
+    | 'false'
+    | 'on_success'
+    | 'success'
+    | 'ok'
+    | 'on_error'
+    | 'error'
+    | 'failed';
+
+/**
+ * 工作流节点连接条件
+ */
+export type WorkflowConnectionCondition = WorkflowConnectionConditionKeyword | (string & { __regexConditionBrand?: never });
+
+/**
  * 工作流节点连接
  */
 export interface WorkflowNodeConnection {
@@ -857,7 +875,7 @@ export interface WorkflowNodeConnection {
     /** 目标节点 ID */
     targetNodeId: string;
     /** 连接条件（可选） */
-    condition?: string | null;
+    condition?: WorkflowConnectionCondition | null;
 }
 
 /**

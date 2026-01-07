@@ -65,6 +65,7 @@ import com.ai.assistance.operit.ui.components.CustomScaffold
 import com.ai.assistance.operit.api.voice.SiliconFlowVoiceProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateListOf
+import com.ai.assistance.operit.api.voice.OpenAIVoiceProvider
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -118,12 +119,16 @@ fun SpeechServicesSettingsScreen(
                 saveMessage = null
                 
                 // 验证 JSON headers
-                val headers = try {
-                    Json.decodeFromString<Map<String, String>>(ttsHeadersInput)
-                } catch (e: Exception) {
-                    if (ttsHeadersInput.isNotBlank() && ttsHeadersInput != "{}") {
-                        throw IllegalArgumentException(context.getString(R.string.speech_services_http_headers_error))
+                val headers = if (ttsServiceTypeInput == VoiceServiceFactory.VoiceServiceType.HTTP_TTS) {
+                    try {
+                        Json.decodeFromString<Map<String, String>>(ttsHeadersInput)
+                    } catch (e: Exception) {
+                        if (ttsHeadersInput.isNotBlank() && ttsHeadersInput != "{}") {
+                            throw IllegalArgumentException(context.getString(R.string.speech_services_http_headers_error))
+                        }
+                        emptyMap()
                     }
+                } else {
                     emptyMap()
                 }
                 
@@ -232,6 +237,7 @@ fun SpeechServicesSettingsScreen(
                                     VoiceServiceFactory.VoiceServiceType.SIMPLE_TTS -> stringResource(R.string.speech_services_tts_type_simple)
                                     VoiceServiceFactory.VoiceServiceType.HTTP_TTS -> stringResource(R.string.speech_services_tts_type_http)
                                     VoiceServiceFactory.VoiceServiceType.SILICONFLOW_TTS -> stringResource(R.string.speech_services_tts_type_siliconflow)
+                                    VoiceServiceFactory.VoiceServiceType.OPENAI_TTS -> stringResource(R.string.speech_services_tts_type_openai)
                                 },
                                 onValueChange = {},
                                 readOnly = true,
@@ -253,6 +259,7 @@ fun SpeechServicesSettingsScreen(
                                                     VoiceServiceFactory.VoiceServiceType.SIMPLE_TTS -> stringResource(R.string.speech_services_tts_type_simple)
                                                     VoiceServiceFactory.VoiceServiceType.HTTP_TTS -> stringResource(R.string.speech_services_tts_type_http)
                                                     VoiceServiceFactory.VoiceServiceType.SILICONFLOW_TTS -> stringResource(R.string.speech_services_tts_type_siliconflow)
+                                                    VoiceServiceFactory.VoiceServiceType.OPENAI_TTS -> stringResource(R.string.speech_services_tts_type_openai)
                                                 },
                                                 fontWeight = if (ttsServiceTypeInput == type) FontWeight.Medium else FontWeight.Normal
                                             ) 
@@ -433,7 +440,8 @@ fun SpeechServicesSettingsScreen(
                                     )
                                 }
 
-                                                                 Spacer(modifier = Modifier.height(8.dp))
+                                Spacer(modifier = Modifier.height(8.dp))
+
                                 Row(modifier = Modifier.fillMaxWidth()) {
                                     OutlinedTextField(
                                         value = ttsHttpMethodInput,
@@ -601,6 +609,138 @@ fun SpeechServicesSettingsScreen(
                                         )
                                     }
                                 )
+                            }
+                        }
+
+                        AnimatedVisibility(visible = ttsServiceTypeInput == VoiceServiceFactory.VoiceServiceType.OPENAI_TTS) {
+                            Column(modifier = Modifier.padding(top = 16.dp)) {
+                                Text(
+                                    text = stringResource(R.string.speech_services_openai_config),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                OutlinedTextField(
+                                    value = ttsUrlTemplateInput,
+                                    onValueChange = { ttsUrlTemplateInput = it },
+                                    label = { Text(stringResource(R.string.speech_services_openai_url)) },
+                                    placeholder = { Text(stringResource(R.string.speech_services_openai_url_placeholder)) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    supportingText = {
+                                        Text(
+                                            text = stringResource(R.string.speech_services_openai_url_hint),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                )
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                OutlinedTextField(
+                                    value = ttsApiKeyInput,
+                                    onValueChange = { ttsApiKeyInput = it },
+                                    label = { Text(stringResource(R.string.speech_services_openai_api_key)) },
+                                    placeholder = { Text(stringResource(R.string.speech_services_openai_api_key_placeholder)) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                OutlinedTextField(
+                                    value = ttsModelNameInput,
+                                    onValueChange = { ttsModelNameInput = it },
+                                    label = { Text(stringResource(R.string.speech_services_openai_model)) },
+                                    placeholder = { Text(stringResource(R.string.speech_services_openai_model_placeholder)) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                                Text(
+                                    text = stringResource(R.string.speech_services_openai_voice_settings),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                var openAiVoiceDropdownExpanded by remember { mutableStateOf(false) }
+                                val openAiVoices = remember { OpenAIVoiceProvider.AVAILABLE_VOICES }
+                                var openAiUseCustomVoice by remember(ttsVoiceIdInput) {
+                                    mutableStateOf(
+                                        ttsVoiceIdInput.isNotBlank() && openAiVoices.none { it.id == ttsVoiceIdInput }
+                                    )
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    FilterChip(
+                                        selected = openAiUseCustomVoice,
+                                        onClick = { openAiUseCustomVoice = !openAiUseCustomVoice },
+                                        label = { Text(stringResource(R.string.speech_services_openai_voice_custom)) }
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                AnimatedVisibility(visible = !openAiUseCustomVoice) {
+                                    val selectedOpenAiVoiceName = remember(ttsVoiceIdInput) {
+                                        openAiVoices.find { it.id == ttsVoiceIdInput }?.name
+                                            ?: ttsVoiceIdInput
+                                    }
+
+                                    ExposedDropdownMenuBox(
+                                        expanded = openAiVoiceDropdownExpanded,
+                                        onExpandedChange = { openAiVoiceDropdownExpanded = it }
+                                    ) {
+                                        OutlinedTextField(
+                                            value = selectedOpenAiVoiceName,
+                                            onValueChange = {},
+                                            readOnly = true,
+                                            label = { Text(stringResource(R.string.speech_services_openai_voice_select)) },
+                                            trailingIcon = {
+                                                Icon(
+                                                    Icons.Default.ArrowDropDown,
+                                                    stringResource(R.string.speech_services_openai_voice_select_icon)
+                                                )
+                                            },
+                                            modifier = Modifier.menuAnchor().fillMaxWidth()
+                                        )
+                                        ExposedDropdownMenu(
+                                            expanded = openAiVoiceDropdownExpanded,
+                                            onDismissRequest = { openAiVoiceDropdownExpanded = false }
+                                        ) {
+                                            openAiVoices.forEach { voice ->
+                                                DropdownMenuItem(
+                                                    text = { Text(voice.name) },
+                                                    onClick = {
+                                                        ttsVoiceIdInput = voice.id
+                                                        openAiVoiceDropdownExpanded = false
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                AnimatedVisibility(visible = openAiUseCustomVoice) {
+                                    OutlinedTextField(
+                                        value = ttsVoiceIdInput,
+                                        onValueChange = { ttsVoiceIdInput = it },
+                                        label = { Text(stringResource(R.string.speech_services_openai_voice_id)) },
+                                        placeholder = { Text(stringResource(R.string.speech_services_openai_voice_id_placeholder)) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true
+                                    )
+                                }
                             }
                         }
                     }

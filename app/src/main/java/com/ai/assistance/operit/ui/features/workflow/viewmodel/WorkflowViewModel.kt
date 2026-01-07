@@ -74,6 +74,29 @@ class WorkflowViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun createErrorBranchTemplateWorkflow(onSuccess: (Workflow) -> Unit = {}) {
+        viewModelScope.launch {
+            isLoading = true
+            error = null
+
+            val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            val workflow = buildErrorBranchTemplateWorkflow(
+                name = "失败分支模板 $time",
+                description = ""
+            )
+
+            repository.createWorkflow(workflow).fold(
+                onSuccess = {
+                    loadWorkflows()
+                    onSuccess(it)
+                },
+                onFailure = { error = it.message ?: "创建工作流失败" }
+            )
+
+            isLoading = false
+        }
+    }
+
     /**
      * 更新连接条件
      */
@@ -580,6 +603,58 @@ class WorkflowViewModel(application: Application) : AndroidViewModel(application
             name = name,
             description = description,
             nodes = listOf(trigger, visitWeb, extractVisitKey, followFirstLink),
+            connections = connections
+        )
+    }
+
+    private fun buildErrorBranchTemplateWorkflow(name: String, description: String): Workflow {
+        val triggerId = UUID.randomUUID().toString()
+        val mainId = UUID.randomUUID().toString()
+        val successId = UUID.randomUUID().toString()
+        val errorId = UUID.randomUUID().toString()
+
+        val trigger = TriggerNode(
+            id = triggerId,
+            name = "手动触发",
+            triggerType = "manual",
+            position = templateNodePosition(0)
+        )
+
+        val mainAction = ExecuteNode(
+            id = mainId,
+            name = "主动作（请配置）",
+            actionType = "",
+            position = templateNodePosition(1)
+        )
+
+        val onSuccess = ConditionNode(
+            id = successId,
+            name = "成功 -> 正常分支",
+            left = ParameterValue.StaticValue("1"),
+            operator = ConditionOperator.EQ,
+            right = ParameterValue.StaticValue("1"),
+            position = templateNodePosition(2)
+        )
+
+        val onError = ConditionNode(
+            id = errorId,
+            name = "失败 -> 错误处理分支",
+            left = ParameterValue.StaticValue("1"),
+            operator = ConditionOperator.EQ,
+            right = ParameterValue.StaticValue("1"),
+            position = templateNodePosition(3)
+        )
+
+        val connections = listOf(
+            WorkflowNodeConnection(sourceNodeId = triggerId, targetNodeId = mainId),
+            WorkflowNodeConnection(sourceNodeId = mainId, targetNodeId = successId, condition = "on_success"),
+            WorkflowNodeConnection(sourceNodeId = mainId, targetNodeId = errorId, condition = "on_error")
+        )
+
+        return Workflow(
+            name = name,
+            description = description,
+            nodes = listOf(trigger, mainAction, onSuccess, onError),
             connections = connections
         )
     }

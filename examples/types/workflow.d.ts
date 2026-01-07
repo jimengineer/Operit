@@ -104,11 +104,23 @@ export namespace Workflow {
      */
     export interface Connection extends WorkflowNodeConnection { }
 
+    export type ConnectionConditionKeyword =
+        | 'true'
+        | 'false'
+        | 'on_success'
+        | 'success'
+        | 'ok'
+        | 'on_error'
+        | 'error'
+        | 'failed';
+
+    export type ConnectionCondition = ConnectionConditionKeyword | (string & { __regexConditionBrand?: never });
+
     export interface ConnectionInput {
         id?: string;
         sourceNodeId?: string;
         targetNodeId?: string;
-        condition?: string | null;
+        condition?: ConnectionCondition | null;
     }
 
     /**

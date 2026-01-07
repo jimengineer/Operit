@@ -130,6 +130,9 @@ class SpeechServicesPreferences(private val context: Context) {
                 VoiceServiceFactory.VoiceServiceType.SILICONFLOW_TTS -> {
                     httpConfig?.let { prefs[TTS_HTTP_CONFIG] = Json.encodeToString(it) }
                 }
+                VoiceServiceFactory.VoiceServiceType.OPENAI_TTS -> {
+                    httpConfig?.let { prefs[TTS_HTTP_CONFIG] = Json.encodeToString(it) }
+                }
             }
         }
     }

@@ -236,6 +236,12 @@ fun WorkflowListScreen(
                         viewModel.createExtractTemplateWorkflow { workflow ->
                             onNavigateToDetail(workflow.id)
                         }
+                    },
+                    onSelectErrorBranchTemplate = {
+                        showTemplateDialog = false
+                        viewModel.createErrorBranchTemplateWorkflow { workflow ->
+                            onNavigateToDetail(workflow.id)
+                        }
                     }
                 )
             }
@@ -250,7 +256,8 @@ private fun TemplateTypeDialog(
     onSelectConditionTemplate: () -> Unit,
     onSelectLogicAndTemplate: () -> Unit,
     onSelectLogicOrTemplate: () -> Unit,
-    onSelectExtractTemplate: () -> Unit
+    onSelectExtractTemplate: () -> Unit,
+    onSelectErrorBranchTemplate: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -284,6 +291,11 @@ private fun TemplateTypeDialog(
                     title = "提取（Extract）",
                     subtitle = "提取 visit_key -> 跟进搜索链接",
                     onClick = onSelectExtractTemplate
+                )
+                TemplateTypeItem(
+                    title = "失败分支（On Error）",
+                    subtitle = "主节点失败 -> 错误处理分支；成功 -> 正常分支",
+                    onClick = onSelectErrorBranchTemplate
                 )
             }
         },

@@ -514,6 +514,7 @@ class WorkflowExecutor(private val context: Context) {
         val startedTriggerNodeIds = startNodeIds.toSet()
         val queue: Queue<String> = LinkedList()
         val currentInDegree = mutableMapOf<String, Int>()
+        var hasFailure = false
 
         for (nodeId in reachableNodeIds) {
             if (triggerNodeIds.contains(nodeId)) {
@@ -590,6 +591,12 @@ class WorkflowExecutor(private val context: Context) {
                         rawCondition
                     }
 
+                    val conditionKey = effectiveCondition.trim().lowercase()
+                    when (conditionKey) {
+                        "error", "failed", "on_error" -> return@any sourceState is NodeExecutionState.Failed
+                        "success", "ok", "on_success" -> return@any sourceState is NodeExecutionState.Success
+                    }
+
                     if (effectiveCondition.isBlank()) {
                         return@any sourceState is NodeExecutionState.Success
                     }
@@ -643,7 +650,7 @@ class WorkflowExecutor(private val context: Context) {
             // 如果执行失败，停止整个流程
             if (!executionSuccess) {
                 AppLogger.e(TAG, "节点执行失败: ${node.name}")
-                return false
+                hasFailure = true
             }
             
             // 将后继节点的入度减1，如果入度变为0则加入队列
@@ -658,7 +665,28 @@ class WorkflowExecutor(private val context: Context) {
             }
         }
         
-        return true
+        if (!hasFailure) {
+            return true
+        }
+
+        val outgoingConnectionsBySource = workflow.connections.groupBy { it.sourceNodeId }
+        fun isErrorCondition(condition: String?): Boolean {
+            val normalized = condition?.trim()?.lowercase().orEmpty()
+            return normalized == "error" || normalized == "failed" || normalized == "on_error"
+        }
+
+        val hasUnhandledFailure = nodeResults.any { (nodeId, state) ->
+            if (state !is NodeExecutionState.Failed) {
+                return@any false
+            }
+            val outgoing = outgoingConnectionsBySource[nodeId].orEmpty()
+            val handled = outgoing.any { conn ->
+                isErrorCondition(conn.condition) && nodeResults[conn.targetNodeId] is NodeExecutionState.Success
+            }
+            !handled
+        }
+
+        return !hasUnhandledFailure
     }
     
     private fun resolveParameters(

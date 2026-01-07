@@ -2,8 +2,8 @@
 {
   name: "workflow"
   description: {
-    zh: '''工作流管理工具：用于创建、查询、更新、删除工作流，并可触发执行。'''
-    en: '''Workflow management tools for creating, querying, updating, deleting workflows, and triggering execution.'''
+    zh: '''工作流管理工具：创建/查询/更新/删除/触发执行；支持 on_success/on_error 分支。'''
+    en: '''Workflow management tools for creating/querying/updating/deleting workflows, triggering execution, and branching via on_success/on_error.'''
   }
 
   enabledByDefault: true
@@ -19,7 +19,7 @@
   - 节点类型：trigger/execute/condition/logic/extract
   - 触发节点类型：manual/schedule/tasker/intent
   - 参数引用（ParameterValue）：静态值 vs 引用其他节点输出
-  - 分支连线 condition 的语义：true/false/regex
+  - 分支连线 condition 的语义：on_success/on_error/true/false/regex
 
 - 重要：create_workflow/update_workflow 的 nodes/connections 参数底层类型是 string（JSON 数组字符串）。
   - 本示例封装允许你直接传对象数组，封装层会自动 JSON.stringify。
@@ -39,12 +39,16 @@
     - 或 sourceNodeName/targetNodeName（不推荐：同名会歧义）
 
 - 分支连线 condition（核心）：
+  - 通用关键字（适用于任何节点类型）：
+    - condition = "on_success" | "success" | "ok"：源节点成功时触发
+    - condition = "on_error" | "error" | "failed"：源节点失败时触发（失败分支/补救逻辑）
   - 对 ConditionNode / LogicNode：
     - condition 为空：默认代表 true 分支（相当于 "true"）
     - condition = "false"：false 分支
     - condition = 其它字符串：当作 Regex 匹配源节点输出字符串
   - 对非 Condition/Logic 节点：
-    - condition 为空：表示“源节点执行成功就走”（顺序依赖）
+    - condition 为空：等价于 on_success（表示“源节点执行成功就走”）
+    - condition = on_error：表示“源节点失败就走”（失败分支）
 
 - 参数引用（ParameterValue）：
   - 静态值：直接写字符串/数字/布尔值即可（会被当作 StaticValue）
@@ -77,7 +81,7 @@ Workflow tool usage advice (for the AI):
   - Node types: trigger/execute/condition/logic/extract
   - Trigger node types: manual/schedule/tasker/intent
   - Parameter references (ParameterValue): static values vs references to another node output
-  - Connection "condition" meaning: true/false/regex
+  - Connection "condition" meaning: on_success/on_error/true/false/regex
 
 - Important: in create_workflow/update_workflow, nodes/connections are strings (JSON array strings) at the API layer.
   - This example wrapper lets you pass object arrays directly; it will JSON.stringify automatically.
@@ -97,12 +101,16 @@ Workflow tool usage advice (for the AI):
     - or sourceNodeName/targetNodeName (not recommended: duplicates are ambiguous)
 
 - Connection condition (core):
+  - Global keywords (works for any node type):
+    - condition = "on_success" | "success" | "ok": trigger when the source node succeeds
+    - condition = "on_error" | "error" | "failed": trigger when the source node fails (error branch / recovery)
   - For ConditionNode / LogicNode:
     - empty condition: defaults to true branch (equivalent to "true")
     - condition = "false": false branch
     - other string: treated as a Regex to match the source node output string
   - For non-Condition/Logic nodes:
-    - empty condition: means "proceed if the source node executed successfully" (sequential dependency)
+    - empty condition: equivalent to on_success (proceed if the source node succeeded)
+    - condition = on_error: proceed if the source node failed (error branch)
 
 - Parameter references (ParameterValue):
   - Static value: write a string/number/boolean directly (treated as StaticValue)
