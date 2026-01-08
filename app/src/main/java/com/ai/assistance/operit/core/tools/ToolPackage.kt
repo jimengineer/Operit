@@ -82,6 +82,38 @@ package com.ai.assistance.operit.core.tools
  
          return values.values.firstOrNull().orEmpty()
      }
+
+     fun resolve(preferredLanguage: String): String {
+         val normalized = preferredLanguage.trim()
+         if (normalized.isEmpty()) {
+             return values["default"] ?: values.values.firstOrNull().orEmpty()
+         }
+
+         val lower = normalized.lowercase()
+         val languageOnlyLower = lower.substringBefore('-')
+         val languageOnlyOriginal = normalized.substringBefore('-')
+
+         val preferredKeys = mutableListOf<String>().apply {
+             add(normalized)
+             add(lower)
+             if (languageOnlyOriginal.isNotBlank() && languageOnlyOriginal != normalized) {
+                 add(languageOnlyOriginal)
+             }
+             if (languageOnlyLower.isNotBlank() && languageOnlyLower != lower) {
+                 add(languageOnlyLower)
+             }
+             add("default")
+             add("en")
+             add("zh")
+         }
+
+         for (key in preferredKeys) {
+             val value = values[key] ?: values[key.lowercase()]
+             if (value != null) return value
+         }
+
+         return values.values.firstOrNull().orEmpty()
+     }
  
      companion object {
          fun of(value: String): LocalizedText {

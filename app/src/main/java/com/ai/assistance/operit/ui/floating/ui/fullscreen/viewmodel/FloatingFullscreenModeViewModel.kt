@@ -3,6 +3,7 @@ package com.ai.assistance.operit.ui.floating.ui.fullscreen.viewmodel
 import android.content.Context
 import androidx.compose.runtime.*
 import com.ai.assistance.operit.data.model.ChatMessage
+import com.ai.assistance.operit.data.model.InputProcessingState
 import com.ai.assistance.operit.data.model.PromptFunctionType
 import com.ai.assistance.operit.data.preferences.WakeWordPreferences
 import com.ai.assistance.operit.ui.floating.FloatContext
@@ -324,9 +325,22 @@ class FloatingFullscreenModeViewModel(
                         withTimeoutOrNull(20_000L) {
                             voiceService.speakingStateFlow.filter { speaking -> !speaking }.first()
                         }
-                        // 朗读结束后继续循环重新评估（可能用户已插话更新 lastVoiceActivityAtMs）
+                        // 朗读结束后重置计时，给用户一个完整的超时窗口
+                        lastVoiceActivityAtMs = System.currentTimeMillis()
                         continue
                     }
+
+                    // AI 在工具调用/处理/生成过程中，也不要自动关闭。
+                    // 否则会出现“工具调用耗时较长 -> 超时 -> 窗口自动关闭”。
+                    if (isAiBusy()) {
+                        while (isActive && isWaveActive && isAiBusy()) {
+                            delay(250L)
+                        }
+                        // AI 忙完后重置计时，避免立刻触发关闭
+                        lastVoiceActivityAtMs = System.currentTimeMillis()
+                        continue
+                    }
+
                     exitWaveMode()
                     if (floatContext.chatService?.isWakeLaunched() == true) {
                         floatContext.onClose()
@@ -336,6 +350,21 @@ class FloatingFullscreenModeViewModel(
                 delay(minOf(remaining, 500L))
             }
         }
+    }
+
+    private fun isAiBusy(): Boolean {
+        val state = floatContext.inputProcessingState.value
+        val stateBusy =
+            state !is InputProcessingState.Idle &&
+                state !is InputProcessingState.Completed &&
+                state !is InputProcessingState.Error
+
+        val lastMessage = floatContext.messages.lastOrNull()
+        val streamBusy =
+            lastMessage?.sender == "think" ||
+                (lastMessage?.sender == "ai" && lastMessage.contentStream != null)
+
+        return stateBusy || streamBusy
     }
 
     // ===== 编辑模式 =====

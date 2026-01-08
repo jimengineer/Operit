@@ -6,16 +6,17 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -125,7 +126,7 @@ fun EnhancedTableBlock(
                     .fillMaxWidth()
                     .horizontalScroll(horizontalScrollState)
             ) {
-                Column(modifier = Modifier.width(IntrinsicSize.Min)) {
+                Column(modifier = Modifier.wrapContentWidth(unbounded = true)) {
                     // 使用表格ID作为key
                     tableData.rows.forEachIndexed { rowIndex, row ->
                         val isHeader = rowIndex == 0 && tableData.hasHeader

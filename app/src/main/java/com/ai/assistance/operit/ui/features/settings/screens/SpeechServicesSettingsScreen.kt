@@ -2,6 +2,8 @@ package com.ai.assistance.operit.ui.features.settings.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,36 +21,48 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.unit.dp
 import com.ai.assistance.operit.R
 import com.ai.assistance.operit.api.speech.SpeechServiceFactory
@@ -58,14 +73,15 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import androidx.compose.foundation.layout.Arrangement
-import com.ai.assistance.operit.api.voice.VoiceServiceFactory.VoiceServiceType
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.IconButton
+import com.ai.assistance.operit.data.model.ApiProviderType
+import com.ai.assistance.operit.data.model.ModelOption
 import com.ai.assistance.operit.ui.components.CustomScaffold
 import com.ai.assistance.operit.api.voice.SiliconFlowVoiceProvider
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableStateListOf
 import com.ai.assistance.operit.api.voice.OpenAIVoiceProvider
+import com.ai.assistance.operit.api.voice.VoiceListFetcher
+import com.ai.assistance.operit.api.voice.VoiceService
+import com.ai.assistance.operit.api.chat.llmprovider.ModelListFetcher
+import androidx.compose.runtime.LaunchedEffect
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,6 +90,7 @@ fun SpeechServicesSettingsScreen(
     onNavigateToTextToSpeech: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val prefs = remember { SpeechServicesPreferences(context) }
 
@@ -651,14 +668,182 @@ fun SpeechServicesSettingsScreen(
 
                                 Spacer(modifier = Modifier.height(8.dp))
 
+                                var openAiModels by remember { mutableStateOf<List<ModelOption>>(emptyList()) }
+                                var openAiModelsFetchError by remember { mutableStateOf<String?>(null) }
+                                var openAiModelsRefreshing by remember { mutableStateOf(false) }
+                                var openAiShowModelsDialog by remember { mutableStateOf(false) }
+                                var openAiModelSearchQuery by remember { mutableStateOf("") }
+
+                                fun refreshOpenAiModels() {
+                                    if (openAiModelsRefreshing) return
+                                    openAiModelsRefreshing = true
+                                    openAiModelsFetchError = null
+                                    scope.launch {
+                                        try {
+                                            val result = ModelListFetcher.getModelsList(
+                                                apiKey = ttsApiKeyInput,
+                                                apiEndpoint = ttsUrlTemplateInput,
+                                                apiProviderType = ApiProviderType.OPENAI_GENERIC
+                                            )
+                                            result.fold(
+                                                onSuccess = { models ->
+                                                    openAiModels = models
+                                                },
+                                                onFailure = { e ->
+                                                    openAiModelsFetchError =
+                                                        context.getString(
+                                                            R.string.speech_services_openai_models_fetch_failed,
+                                                            e.message ?: "Unknown error"
+                                                        )
+                                                }
+                                            )
+                                        } finally {
+                                            openAiModelsRefreshing = false
+                                        }
+                                    }
+                                }
+
+                                val filteredOpenAiModels = remember(openAiModels, openAiModelSearchQuery) {
+                                    val q = openAiModelSearchQuery.trim().lowercase()
+                                    if (q.isBlank()) {
+                                        openAiModels
+                                    } else {
+                                        openAiModels.filter { m ->
+                                            m.id.lowercase().contains(q) || m.name.lowercase().contains(q)
+                                        }
+                                    }
+                                }
+
+                                LaunchedEffect(openAiShowModelsDialog) {
+                                    if (openAiShowModelsDialog) {
+                                        openAiModelSearchQuery = ""
+                                    }
+                                }
+
+                                if (openAiShowModelsDialog) {
+                                    AlertDialog(
+                                        onDismissRequest = { openAiShowModelsDialog = false },
+                                        title = { Text(stringResource(R.string.speech_services_openai_model_select)) },
+                                        text = {
+                                            Column {
+                                                OutlinedTextField(
+                                                    value = openAiModelSearchQuery,
+                                                    onValueChange = { openAiModelSearchQuery = it },
+                                                    label = { Text(stringResource(R.string.search_models)) },
+                                                    leadingIcon = {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Search,
+                                                            contentDescription = stringResource(R.string.search),
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                    },
+                                                    trailingIcon = {
+                                                        if (openAiModelSearchQuery.isNotBlank()) {
+                                                            IconButton(onClick = { openAiModelSearchQuery = "" }) {
+                                                                Icon(
+                                                                    imageVector = Icons.Default.Clear,
+                                                                    contentDescription = stringResource(R.string.clear)
+                                                                )
+                                                            }
+                                                        }
+                                                    },
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    singleLine = true
+                                                )
+
+                                                Spacer(modifier = Modifier.height(8.dp))
+
+                                                if (filteredOpenAiModels.isEmpty()) {
+                                                    Text(
+                                                        text = stringResource(R.string.no_models_found),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                } else {
+                                                    LazyColumn(
+                                                        modifier = Modifier.heightIn(max = 360.dp)
+                                                    ) {
+                                                        items(
+                                                            items = filteredOpenAiModels,
+                                                            key = { it.id }
+                                                        ) { model ->
+                                                            val displayName = if (model.name == model.id) {
+                                                                model.name
+                                                            } else {
+                                                                "${model.name} (${model.id})"
+                                                            }
+                                                            DropdownMenuItem(
+                                                                text = { Text(displayName) },
+                                                                onClick = {
+                                                                    ttsModelNameInput = model.id
+                                                                    openAiShowModelsDialog = false
+                                                                }
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        confirmButton = {
+                                            TextButton(
+                                                onClick = { openAiShowModelsDialog = false }
+                                            ) {
+                                                Text(stringResource(android.R.string.ok))
+                                            }
+                                        }
+                                    )
+                                }
+
                                 OutlinedTextField(
                                     value = ttsModelNameInput,
                                     onValueChange = { ttsModelNameInput = it },
                                     label = { Text(stringResource(R.string.speech_services_openai_model)) },
                                     placeholder = { Text(stringResource(R.string.speech_services_openai_model_placeholder)) },
                                     modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true
+                                    singleLine = true,
+                                    trailingIcon = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            IconButton(
+                                                onClick = { refreshOpenAiModels() },
+                                                enabled =
+                                                    !openAiModelsRefreshing &&
+                                                        ttsUrlTemplateInput.isNotBlank() &&
+                                                        ttsApiKeyInput.isNotBlank()
+                                            ) {
+                                                if (openAiModelsRefreshing) {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(18.dp),
+                                                        strokeWidth = 2.dp
+                                                    )
+                                                } else {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Refresh,
+                                                        contentDescription = stringResource(R.string.speech_services_openai_models_refresh)
+                                                    )
+                                                }
+                                            }
+
+                                            IconButton(
+                                                onClick = { openAiShowModelsDialog = true },
+                                                enabled = openAiModels.isNotEmpty()
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.AutoMirrored.Filled.FormatListBulleted,
+                                                    contentDescription = stringResource(R.string.available_models_list)
+                                                )
+                                            }
+                                        }
+                                    }
                                 )
+
+                                openAiModelsFetchError?.let { msg ->
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = msg,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
 
                                 Spacer(modifier = Modifier.height(16.dp))
 
@@ -670,75 +855,179 @@ fun SpeechServicesSettingsScreen(
 
                                 Spacer(modifier = Modifier.height(8.dp))
 
-                                var openAiVoiceDropdownExpanded by remember { mutableStateOf(false) }
-                                val openAiVoices = remember { OpenAIVoiceProvider.AVAILABLE_VOICES }
-                                var openAiUseCustomVoice by remember(ttsVoiceIdInput) {
-                                    mutableStateOf(
-                                        ttsVoiceIdInput.isNotBlank() && openAiVoices.none { it.id == ttsVoiceIdInput }
-                                    )
+                                val builtinOpenAiVoices = remember { OpenAIVoiceProvider.AVAILABLE_VOICES }
+                                var openAiVoices by remember { mutableStateOf<List<VoiceService.Voice>>(emptyList()) }
+                                var openAiVoicesFetchError by remember { mutableStateOf<String?>(null) }
+                                var openAiVoicesRefreshing by remember { mutableStateOf(false) }
+                                var openAiShowVoicesDialog by remember { mutableStateOf(false) }
+                                var openAiVoiceSearchQuery by remember { mutableStateOf("") }
+
+                                fun refreshOpenAiVoices() {
+                                    if (openAiVoicesRefreshing) return
+                                    openAiVoicesRefreshing = true
+                                    openAiVoicesFetchError = null
+                                    scope.launch {
+                                        try {
+                                            val result = VoiceListFetcher.getVoicesList(
+                                                apiKey = ttsApiKeyInput,
+                                                ttsEndpointUrl = ttsUrlTemplateInput
+                                            )
+                                            result.fold(
+                                                onSuccess = { voices ->
+                                                    openAiVoices = voices
+                                                },
+                                                onFailure = { e ->
+                                                    openAiVoicesFetchError =
+                                                        context.getString(
+                                                            R.string.speech_services_openai_voices_fetch_failed,
+                                                            e.message ?: "Unknown error"
+                                                        )
+                                                }
+                                            )
+                                        } finally {
+                                            openAiVoicesRefreshing = false
+                                        }
+                                    }
                                 }
 
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    FilterChip(
-                                        selected = openAiUseCustomVoice,
-                                        onClick = { openAiUseCustomVoice = !openAiUseCustomVoice },
-                                        label = { Text(stringResource(R.string.speech_services_openai_voice_custom)) }
+                                val effectiveOpenAiVoices = remember(openAiVoices, builtinOpenAiVoices) {
+                                    if (openAiVoices.isNotEmpty()) openAiVoices else builtinOpenAiVoices
+                                }
+
+                                val filteredOpenAiVoices = remember(effectiveOpenAiVoices, openAiVoiceSearchQuery) {
+                                    val q = openAiVoiceSearchQuery.trim().lowercase()
+                                    if (q.isBlank()) {
+                                        effectiveOpenAiVoices
+                                    } else {
+                                        effectiveOpenAiVoices.filter { v ->
+                                            v.id.lowercase().contains(q) || v.name.lowercase().contains(q)
+                                        }
+                                    }
+                                }
+
+                                LaunchedEffect(openAiShowVoicesDialog) {
+                                    if (openAiShowVoicesDialog) {
+                                        openAiVoiceSearchQuery = ""
+                                    }
+                                }
+
+                                if (openAiShowVoicesDialog) {
+                                    AlertDialog(
+                                        onDismissRequest = { openAiShowVoicesDialog = false },
+                                        title = { Text(stringResource(R.string.speech_services_openai_voice_select)) },
+                                        text = {
+                                            Column {
+                                                OutlinedTextField(
+                                                    value = openAiVoiceSearchQuery,
+                                                    onValueChange = { openAiVoiceSearchQuery = it },
+                                                    label = { Text(stringResource(R.string.search)) },
+                                                    leadingIcon = {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Search,
+                                                            contentDescription = stringResource(R.string.search),
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                    },
+                                                    trailingIcon = {
+                                                        if (openAiVoiceSearchQuery.isNotBlank()) {
+                                                            IconButton(onClick = { openAiVoiceSearchQuery = "" }) {
+                                                                Icon(
+                                                                    imageVector = Icons.Default.Clear,
+                                                                    contentDescription = stringResource(R.string.clear)
+                                                                )
+                                                            }
+                                                        }
+                                                    },
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    singleLine = true
+                                                )
+
+                                                Spacer(modifier = Modifier.height(8.dp))
+
+                                                if (filteredOpenAiVoices.isEmpty()) {
+                                                    Text(
+                                                        text = stringResource(R.string.no_models_found),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                } else {
+                                                    LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                                                        items(
+                                                            items = filteredOpenAiVoices,
+                                                            key = { it.id }
+                                                        ) { voice ->
+                                                            val displayName = if (voice.name == voice.id) {
+                                                                voice.name
+                                                            } else {
+                                                                "${voice.name} (${voice.id})"
+                                                            }
+                                                            DropdownMenuItem(
+                                                                text = { Text(displayName) },
+                                                                onClick = {
+                                                                    ttsVoiceIdInput = voice.id
+                                                                    openAiShowVoicesDialog = false
+                                                                }
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        confirmButton = {
+                                            TextButton(onClick = { openAiShowVoicesDialog = false }) {
+                                                Text(stringResource(android.R.string.ok))
+                                            }
+                                        }
                                     )
                                 }
 
                                 Spacer(modifier = Modifier.height(8.dp))
 
-                                AnimatedVisibility(visible = !openAiUseCustomVoice) {
-                                    val selectedOpenAiVoiceName = remember(ttsVoiceIdInput) {
-                                        openAiVoices.find { it.id == ttsVoiceIdInput }?.name
-                                            ?: ttsVoiceIdInput
-                                    }
+                                OutlinedTextField(
+                                    value = ttsVoiceIdInput,
+                                    onValueChange = { ttsVoiceIdInput = it },
+                                    label = { Text(stringResource(R.string.speech_services_openai_voice_id)) },
+                                    placeholder = { Text(stringResource(R.string.speech_services_openai_voice_id_placeholder)) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    trailingIcon = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            IconButton(
+                                                onClick = { refreshOpenAiVoices() },
+                                                enabled =
+                                                    !openAiVoicesRefreshing &&
+                                                        ttsUrlTemplateInput.isNotBlank() &&
+                                                        ttsApiKeyInput.isNotBlank()
+                                            ) {
+                                                if (openAiVoicesRefreshing) {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(18.dp),
+                                                        strokeWidth = 2.dp
+                                                    )
+                                                } else {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Refresh,
+                                                        contentDescription = stringResource(R.string.speech_services_openai_voices_refresh)
+                                                    )
+                                                }
+                                            }
 
-                                    ExposedDropdownMenuBox(
-                                        expanded = openAiVoiceDropdownExpanded,
-                                        onExpandedChange = { openAiVoiceDropdownExpanded = it }
-                                    ) {
-                                        OutlinedTextField(
-                                            value = selectedOpenAiVoiceName,
-                                            onValueChange = {},
-                                            readOnly = true,
-                                            label = { Text(stringResource(R.string.speech_services_openai_voice_select)) },
-                                            trailingIcon = {
+                                            IconButton(onClick = { openAiShowVoicesDialog = true }) {
                                                 Icon(
-                                                    Icons.Default.ArrowDropDown,
-                                                    stringResource(R.string.speech_services_openai_voice_select_icon)
-                                                )
-                                            },
-                                            modifier = Modifier.menuAnchor().fillMaxWidth()
-                                        )
-                                        ExposedDropdownMenu(
-                                            expanded = openAiVoiceDropdownExpanded,
-                                            onDismissRequest = { openAiVoiceDropdownExpanded = false }
-                                        ) {
-                                            openAiVoices.forEach { voice ->
-                                                DropdownMenuItem(
-                                                    text = { Text(voice.name) },
-                                                    onClick = {
-                                                        ttsVoiceIdInput = voice.id
-                                                        openAiVoiceDropdownExpanded = false
-                                                    }
+                                                    imageVector = Icons.AutoMirrored.Filled.FormatListBulleted,
+                                                    contentDescription = stringResource(R.string.speech_services_openai_voice_select_icon)
                                                 )
                                             }
                                         }
                                     }
-                                }
+                                )
 
-                                AnimatedVisibility(visible = openAiUseCustomVoice) {
-                                    OutlinedTextField(
-                                        value = ttsVoiceIdInput,
-                                        onValueChange = { ttsVoiceIdInput = it },
-                                        label = { Text(stringResource(R.string.speech_services_openai_voice_id)) },
-                                        placeholder = { Text(stringResource(R.string.speech_services_openai_voice_id_placeholder)) },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true
+                                openAiVoicesFetchError?.let { msg ->
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = msg,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error
                                     )
                                 }
                             }

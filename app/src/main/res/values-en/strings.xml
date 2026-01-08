@@ -1896,10 +1896,17 @@
     <string name="speech_services_openai_api_key_placeholder">e.g.: sk-xxxxxx</string>
     <string name="speech_services_openai_model">model</string>
     <string name="speech_services_openai_model_placeholder">e.g.: tts-1</string>
+    <string name="speech_services_openai_model_select">Select model</string>
+    <string name="speech_services_openai_model_custom">Custom model</string>
+    <string name="speech_services_openai_models_refresh">Refresh model list</string>
+    <string name="speech_services_openai_models_refreshing">Refreshing...</string>
+    <string name="speech_services_openai_models_fetch_failed">Failed to fetch model list: %1$s</string>
     <string name="speech_services_openai_voice_settings">Voice Settings</string>
     <string name="speech_services_openai_voice_select">Select preset voice</string>
     <string name="speech_services_openai_voice_select_icon">Select voice</string>
     <string name="speech_services_openai_voice_custom">Custom voice</string>
+    <string name="speech_services_openai_voices_refresh">Refresh voice list</string>
+    <string name="speech_services_openai_voices_fetch_failed">Failed to fetch voice list: %1$s</string>
     <string name="speech_services_openai_voice_id">voice</string>
     <string name="speech_services_openai_voice_id_placeholder">e.g.: alloy</string>
 

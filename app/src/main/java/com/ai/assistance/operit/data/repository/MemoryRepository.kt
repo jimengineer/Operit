@@ -53,6 +53,18 @@ class MemoryRepository(private val context: Context, profileId: String) {
 
         /** Represents a weak link, e.g., "A is sometimes associated with B". */
         const val WEAK_LINK = 0.3f
+
+        fun normalizeFolderPath(folderPath: String?): String? {
+            val raw = folderPath?.trim() ?: return null
+            if (raw.isBlank() || raw == "未分类") return null
+
+            val parts = raw.replace('\\', '/')
+                .split('/')
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+
+            return parts.takeIf { it.isNotEmpty() }?.joinToString("/")
+        }
     }
 
     private val store = ObjectBoxManager.get(context, profileId)
@@ -107,7 +119,7 @@ class MemoryRepository(private val context: Context, profileId: String) {
             this.embedding = Embedding(documentEmbedding)
             this.isDocumentNode = true
             this.documentPath = originalPath
-            this.folderPath = folderPath
+            this.folderPath = normalizeFolderPath(folderPath)
         }
         memoryBox.put(documentMemory)
 
@@ -211,6 +223,7 @@ class MemoryRepository(private val context: Context, profileId: String) {
      */
     suspend fun saveMemory(memory: Memory): Long = withContext(Dispatchers.IO){
         // Generate embedding before saving
+        memory.folderPath = normalizeFolderPath(memory.folderPath)
         if (memory.content.isNotBlank()) {
             val textForEmbedding = generateTextForEmbedding(memory)
             memory.embedding = OnnxEmbeddingService.generateEmbedding(textForEmbedding)
@@ -429,24 +442,25 @@ class MemoryRepository(private val context: Context, profileId: String) {
         folderPath: String? = null,
         semanticThreshold: Float = 0.6f
     ): List<Memory> = withContext(Dispatchers.IO) {
+        val normalizedFolderPath = normalizeFolderPath(folderPath)
         // 支持通配符搜索：如果查询是 "*"，返回所有记忆（在文件夹过滤后）
         if (query.trim() == "*") {
-            return@withContext if (folderPath.isNullOrBlank() || folderPath == "未分类") {
+            return@withContext if (normalizedFolderPath == null) {
                 if (folderPath == "未分类") {
-                    memoryBox.all.filter { it.folderPath.isNullOrEmpty() }
+                    memoryBox.all.filter { normalizeFolderPath(it.folderPath) == null }
                 } else {
                     memoryBox.all
                 }
             } else {
-                getMemoriesByFolderPath(folderPath)
+                getMemoriesByFolderPath(normalizedFolderPath)
             }
         }
         
         if (query.isBlank()) {
-            return@withContext if (folderPath.isNullOrBlank() || folderPath == "未分类") {
-                memoryBox.all.filter { it.folderPath.isNullOrEmpty() }
+            return@withContext if (normalizedFolderPath == null) {
+                memoryBox.all.filter { normalizeFolderPath(it.folderPath) == null }
             } else {
-                getMemoriesByFolderPath(folderPath)
+                getMemoriesByFolderPath(normalizedFolderPath)
             }
         }
 
@@ -466,14 +480,14 @@ class MemoryRepository(private val context: Context, profileId: String) {
         // --- PRE-FILTERING BY FOLDER ---
         // If a folder path is provided, all subsequent searches will be performed on this subset.
         // Otherwise, search all memories.
-        val memoriesToSearch = if (folderPath.isNullOrBlank() || folderPath == "未分类") {
+        val memoriesToSearch = if (normalizedFolderPath == null) {
             if (folderPath == "未分类") {
-                memoryBox.all.filter { it.folderPath.isNullOrEmpty() }
+                memoryBox.all.filter { normalizeFolderPath(it.folderPath) == null }
             } else {
                 memoryBox.all
             }
         } else {
-            getMemoriesByFolderPath(folderPath)
+            getMemoriesByFolderPath(normalizedFolderPath)
         }
 
         if (memoriesToSearch.isEmpty()) {
@@ -855,7 +869,7 @@ class MemoryRepository(private val context: Context, profileId: String) {
         val allMemories = memoryBox.all
         com.ai.assistance.operit.util.AppLogger.d("MemoryRepository", "getAllFolderPaths: Total memories: ${allMemories.size}")
         val folderPaths = allMemories
-            .map { it.folderPath ?: "未分类" }
+            .map { normalizeFolderPath(it.folderPath) ?: "未分类" }
             .distinct()
             .sorted()
         com.ai.assistance.operit.util.AppLogger.d("MemoryRepository", "getAllFolderPaths: Unique folders: $folderPaths")
@@ -868,15 +882,13 @@ class MemoryRepository(private val context: Context, profileId: String) {
      * @return 该文件夹及其所有子文件夹下的记忆列表。
      */
     suspend fun getMemoriesByFolderPath(folderPath: String): List<Memory> = withContext(Dispatchers.IO) {
-        if (folderPath == "未分类") {
-            // 查询 folderPath 为 null 或空字符串的记忆
-            memoryBox.all.filter { it.folderPath.isNullOrEmpty() }
+        val normalizedTarget = normalizeFolderPath(folderPath)
+        if (folderPath == "未分类" || normalizedTarget == null) {
+            memoryBox.all.filter { normalizeFolderPath(it.folderPath) == null }
         } else {
-            // 包括当前文件夹及所有子文件夹的记忆
-            // 例如：选择 "技术" 会包含 "技术/编程"、"技术/编程/Java" 等
             memoryBox.all.filter { memory ->
-                val path = memory.folderPath ?: ""
-                path == folderPath || path.startsWith("$folderPath/")
+                val path = normalizeFolderPath(memory.folderPath) ?: return@filter false
+                path == normalizedTarget || path.startsWith("$normalizedTarget/")
             }
         }
     }
@@ -898,22 +910,24 @@ class MemoryRepository(private val context: Context, profileId: String) {
      * @return 是否成功。
      */
     suspend fun renameFolder(oldPath: String, newPath: String): Boolean = withContext(Dispatchers.IO) {
-        if (oldPath == newPath) return@withContext true
+        val normalizedOldPath = normalizeFolderPath(oldPath) ?: return@withContext false
+        val normalizedNewPath = normalizeFolderPath(newPath) ?: return@withContext false
+        if (normalizedOldPath == normalizedNewPath) return@withContext true
         
         try {
             // 获取该文件夹及其所有子文件夹下的记忆
             val memories = memoryBox.all.filter { memory ->
-                val path = memory.folderPath ?: ""
-                path == oldPath || path.startsWith("$oldPath/")
+                val path = normalizeFolderPath(memory.folderPath) ?: return@filter false
+                path == normalizedOldPath || path.startsWith("$normalizedOldPath/")
             }
             
             // 批量更新路径
             memories.forEach { memory ->
-                val currentPath = memory.folderPath ?: ""
-                memory.folderPath = if (currentPath == oldPath) {
-                    newPath
+                val currentPath = normalizeFolderPath(memory.folderPath) ?: return@forEach
+                memory.folderPath = if (currentPath == normalizedOldPath) {
+                    normalizedNewPath
                 } else {
-                    currentPath.replaceFirst(oldPath, newPath)
+                    normalizedNewPath + currentPath.removePrefix(normalizedOldPath)
                 }
             }
             
@@ -933,8 +947,13 @@ class MemoryRepository(private val context: Context, profileId: String) {
      */
     suspend fun moveMemoriesToFolder(memoryIds: List<Long>, targetFolderPath: String): Boolean = withContext(Dispatchers.IO) {
         try {
+            val normalizedTarget = if (targetFolderPath == "未分类") {
+                null
+            } else {
+                normalizeFolderPath(targetFolderPath)
+            }
             val memories = memoryIds.mapNotNull { findMemoryById(it) }
-            memories.forEach { it.folderPath = targetFolderPath }
+            memories.forEach { it.folderPath = normalizedTarget }
             memoryBox.put(memories)
             true
         } catch (e: Exception) {
@@ -950,16 +969,17 @@ class MemoryRepository(private val context: Context, profileId: String) {
      */
     suspend fun createFolder(folderPath: String): Boolean = withContext(Dispatchers.IO) {
         try {
+            val normalizedFolderPath = normalizeFolderPath(folderPath) ?: return@withContext false
             // 检查是否已存在该文件夹
-            val exists = memoryBox.all.any { (it.folderPath ?: "") == folderPath }
+            val exists = memoryBox.all.any { normalizeFolderPath(it.folderPath) == normalizedFolderPath }
             if (exists) return@withContext true
             
             // 创建一个占位记忆
             val placeholder = Memory(
                 title = "文件夹说明",
-                content = "这是 $folderPath 文件夹的说明。",
+                content = "这是 $normalizedFolderPath 文件夹的说明。",
                 uuid = UUID.randomUUID().toString(),
-                folderPath = folderPath
+                folderPath = normalizedFolderPath
             )
             val embedding = try {
                 OnnxEmbeddingService.generateEmbedding(placeholder.content)
@@ -984,7 +1004,7 @@ class MemoryRepository(private val context: Context, profileId: String) {
             content = content,
             contentType = contentType,
             source = source,
-            folderPath = folderPath
+            folderPath = normalizeFolderPath(folderPath)
         )
         val textForEmbedding = generateTextForEmbedding(memory)
         memory.embedding = OnnxEmbeddingService.generateEmbedding(textForEmbedding) ?: return@withContext null
@@ -1025,7 +1045,7 @@ class MemoryRepository(private val context: Context, profileId: String) {
             source = newSource
             credibility = newCredibility
             importance = newImportance
-            folderPath = newFolderPath
+            folderPath = normalizeFolderPath(newFolderPath)
         }
 
         val newEmbedding = if (needsReEmbedding) {
@@ -1092,7 +1112,7 @@ class MemoryRepository(private val context: Context, profileId: String) {
                 val mergedMemory = Memory(
             title = newTitle,
             content = newContent,
-                    folderPath = folderPath,
+                    folderPath = normalizeFolderPath(folderPath),
                     source = "merged_from_problem_library"
                 )
                 memoryBox.put(mergedMemory) // Save to get an ID
@@ -1304,8 +1324,8 @@ class MemoryRepository(private val context: Context, profileId: String) {
                     // 检测是否为跨文件夹连接
                     // 始终检测跨文件夹连接，无论是否选择了特定文件夹
                     val isCrossFolder = if (sourceMemory != null && targetMemory != null) {
-                        val sourcePath = sourceMemory.folderPath ?: "未分类"
-                        val targetPath = targetMemory.folderPath ?: "未分类"
+                        val sourcePath = normalizeFolderPath(sourceMemory.folderPath) ?: "未分类"
+                        val targetPath = normalizeFolderPath(targetMemory.folderPath) ?: "未分类"
                         sourcePath != targetPath
                     } else {
                         false
@@ -1340,9 +1360,14 @@ class MemoryRepository(private val context: Context, profileId: String) {
      */
     suspend fun deleteFolder(folderPath: String) {
         withContext(Dispatchers.IO) {
-            val memories = memoryBox.query(Memory_.folderPath.equal(folderPath)).build().find()
+            val normalizedTarget = normalizeFolderPath(folderPath)
+            val memories = if (normalizedTarget == null || folderPath == "未分类") {
+                memoryBox.all.filter { normalizeFolderPath(it.folderPath) == null }
+            } else {
+                memoryBox.all.filter { normalizeFolderPath(it.folderPath) == normalizedTarget }
+            }
             memories.forEach { memory ->
-                memory.folderPath = "未分类"
+                memory.folderPath = null
                 memoryBox.put(memory)
             }
             com.ai.assistance.operit.util.AppLogger.d("MemoryRepo", "Deleted folder '$folderPath', moved ${memories.size} memories to '未分类'")
@@ -1462,7 +1487,7 @@ class MemoryRepository(private val context: Context, profileId: String) {
                             source = serializableMemory.source
                             credibility = serializableMemory.credibility
                             importance = serializableMemory.importance
-                            folderPath = serializableMemory.folderPath
+                            folderPath = normalizeFolderPath(serializableMemory.folderPath)
                             updatedAt = Date()
                         }
                         memoryBox.put(existingMemory)
@@ -1548,7 +1573,7 @@ class MemoryRepository(private val context: Context, profileId: String) {
             source = serializable.source,
             credibility = serializable.credibility,
             importance = serializable.importance,
-            folderPath = serializable.folderPath,
+            folderPath = normalizeFolderPath(serializable.folderPath),
             createdAt = serializable.createdAt,
             updatedAt = serializable.updatedAt
         )

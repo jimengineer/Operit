@@ -220,6 +220,7 @@ fun FloatingFullscreenMode(floatContext: FloatContext) {
         ) {
             // 波浪可视化和头像：仅在语音模式下显示
             if (viewModel.isWaveActive) {
+                val waveOffsetY = (-64).dp
                 WaveVisualizerSection(
                     isWaveActive = viewModel.isWaveActive,
                     isRecording = viewModel.isRecording,
@@ -236,6 +237,7 @@ fun FloatingFullscreenMode(floatContext: FloatContext) {
                     },
                     modifier = Modifier
                         .align(Alignment.Center)
+                        .offset(y = waveOffsetY)
                         .zIndex(1f)
                 )
 
@@ -243,6 +245,7 @@ fun FloatingFullscreenMode(floatContext: FloatContext) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.Center)
+                        .offset(y = waveOffsetY)
                         .size(140.dp)
                         .zIndex(4f)
                         .clickable(
@@ -272,9 +275,9 @@ fun FloatingFullscreenMode(floatContext: FloatContext) {
                         Modifier
                             .align(Alignment.BottomCenter)
                             .fillMaxWidth()
-                            .fillMaxHeight(0.42f)
+                            .fillMaxHeight(0.52f)
                             .padding(horizontal = 16.dp)
-                            .padding(bottom = 32.dp)
+                            .padding(bottom = 16.dp)
                     } else {
                         // 正常模式：文本在波浪下方
                         Modifier

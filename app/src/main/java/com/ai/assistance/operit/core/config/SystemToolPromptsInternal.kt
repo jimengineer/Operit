@@ -662,6 +662,13 @@ object SystemToolPromptsInternal {
                                         required = false
                                     ),
                                     ToolParameterSchema(
+                                        name = "partialMatch",
+                                        type = "boolean",
+                                        description = "optional, enable partial match for selectors",
+                                        required = false,
+                                        default = "false"
+                                    ),
+                                    ToolParameterSchema(
                                         name = "index",
                                         type = "integer",
                                         description = "optional",
@@ -1660,6 +1667,13 @@ object SystemToolPromptsInternal {
                                         type = "string",
                                         description = "可选，格式：[left,top][right,bottom]",
                                         required = false
+                                    ),
+                                    ToolParameterSchema(
+                                        name = "partialMatch",
+                                        type = "boolean",
+                                        description = "可选，是否启用部分匹配",
+                                        required = false,
+                                        default = "false"
                                     ),
                                     ToolParameterSchema(
                                         name = "index",

@@ -1934,10 +1934,17 @@
     <string name="speech_services_openai_api_key_placeholder">例如：sk-xxxxxx</string>
     <string name="speech_services_openai_model">model</string>
     <string name="speech_services_openai_model_placeholder">例如：tts-1</string>
+    <string name="speech_services_openai_model_select">选择模型</string>
+    <string name="speech_services_openai_model_custom">自定义模型</string>
+    <string name="speech_services_openai_models_refresh">刷新模型列表</string>
+    <string name="speech_services_openai_models_refreshing">正在刷新...</string>
+    <string name="speech_services_openai_models_fetch_failed">模型列表获取失败：%1$s</string>
     <string name="speech_services_openai_voice_settings">音色设置</string>
     <string name="speech_services_openai_voice_select">选择预设音色</string>
     <string name="speech_services_openai_voice_select_icon">选择音色</string>
     <string name="speech_services_openai_voice_custom">自定义音色</string>
+    <string name="speech_services_openai_voices_refresh">刷新音色列表</string>
+    <string name="speech_services_openai_voices_fetch_failed">音色列表获取失败：%1$s</string>
     <string name="speech_services_openai_voice_id">voice</string>
     <string name="speech_services_openai_voice_id_placeholder">例如：alloy</string>
 

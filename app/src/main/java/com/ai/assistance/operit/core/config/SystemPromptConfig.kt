@@ -320,7 +320,13 @@ AVAILABLE_TOOLS_SECTION""".trimIndent()
       for (packageName in validImportedPackages) {
         val packageTools = packageManager.getPackageTools(packageName)
         if (packageTools != null) {
-          packagesSection.appendLine("- $packageName : ${packageTools.description}")
+          val preferredLanguage = if (useEnglish) "en" else "zh"
+          val resolvedDescription = try {
+              packageTools.description.resolve(preferredLanguage)
+          } catch (_: Exception) {
+              packageTools.description.toString()
+          }
+          packagesSection.appendLine("- $packageName : $resolvedDescription")
         }
       }
 
