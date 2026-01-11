@@ -7,6 +7,13 @@ import textwrap
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Optional
+
+
+def _decode_output(data: Optional[bytes]) -> str:
+    if not data:
+        return ""
+    return data.decode("utf-8", errors="replace")
 
 
 def _run_git(args: list[str], cwd: Path) -> str:
@@ -15,11 +22,10 @@ def _run_git(args: list[str], cwd: Path) -> str:
         cwd=str(cwd),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
     )
     if p.returncode != 0:
-        raise RuntimeError(f"git {' '.join(args)} failed:\n{p.stderr.strip()}")
-    return p.stdout
+        raise RuntimeError(f"git {' '.join(args)} failed:\n{_decode_output(p.stderr).strip()}")
+    return _decode_output(p.stdout)
 
 
 def _repo_root() -> Path:
@@ -27,11 +33,10 @@ def _repo_root() -> Path:
         ["git", "rev-parse", "--show-toplevel"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
     )
     if p.returncode != 0:
         raise RuntimeError("Not a git repository (or git not installed).")
-    return Path(p.stdout.strip())
+    return Path(_decode_output(p.stdout).strip())
 
 
 def _load_env(env_path: Path) -> None:
